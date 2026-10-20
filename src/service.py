@@ -38,12 +38,26 @@ class RPCService:
     def apply_config(self, cfg: dict[str, Any]) -> None:
         with self._lock:
             old_id = str(self.cfg.get("discord_client_id") or "")
+            was_enabled = bool(self.cfg.get("enabled", True))
             self.cfg = dict(cfg)
             save_config(self.cfg)
             new_id = str(self.cfg.get("discord_client_id") or "")
             if new_id != old_id:
                 self.rpc.reconnect(new_id)
+            if was_enabled and not self.cfg.get("enabled", True):
+                self.rpc.clear()
+                self._status_ok = False
+                self._status_msg = "Disabled"
             autostart.sync_autostart(bool(self.cfg.get("autostart", True)))
+
+    def set_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self.cfg["enabled"] = bool(enabled)
+            save_config(self.cfg)
+            if not enabled:
+                self.rpc.clear()
+                self._status_ok = False
+                self._status_msg = "Disabled"
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -88,7 +102,7 @@ class RPCService:
                 log.exception("RPC loop error: %s", exc)
                 self._status_ok = False
                 self._status_msg = "Error"
-            self._stop.wait(5.0)
+            self._stop.wait(3.0)
 
     # ── tray ────────────────────────────────────────────────
     def run_tray_and_ui(self, start_minimized: bool = False) -> None:
@@ -106,6 +120,7 @@ class RPCService:
         self.app = SettingsApp(
             config=self.cfg,
             on_save=self.apply_config,
+            on_toggle_rpc=self.set_enabled,
             get_live_state=self.get_live_state,
             get_rpc_status=self.get_rpc_status,
             start_minimized=start_minimized or bool(self.cfg.get("start_minimized")),
@@ -115,6 +130,16 @@ class RPCService:
 
         def on_open(_icon=None, _item=None):
             self.app.after(0, self.app.show_window)
+
+        def on_disable(_icon=None, _item=None):
+            self.set_enabled(False)
+            if self.app is not None:
+                self.app.after(0, lambda: self.app._set_rpc_enabled(False))
+
+        def on_enable(_icon=None, _item=None):
+            self.set_enabled(True)
+            if self.app is not None:
+                self.app.after(0, lambda: self.app._set_rpc_enabled(True))
 
         def on_quit(_icon=None, _item=None):
             self.stop()
@@ -126,6 +151,8 @@ class RPCService:
 
             menu = pystray.Menu(
                 Item("Открыть настройки", on_open, default=True),
+                Item("Отключить RPC", on_disable),
+                Item("Включить RPC", on_enable),
                 Item("Выход", on_quit),
             )
             self._tray = pystray.Icon("cursor_discord_rpc", img, APP_NAME, menu)

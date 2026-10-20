@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "Cursor Discord RPC"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 REPO_URL = "https://github.com/ItzHanchik/cursor-discord-rpc"
 # Default Discord Application (override in settings if needed)
 DISCORD_CLIENT_ID_DEFAULT = "1562085628630540318"
@@ -50,7 +50,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "autostart": True,
     "only_when_cursor_running": True,
     "large_image_key": "cursor",
-    "large_image_text": "Cursor IDE",
+    "large_image_text": "",
     "start_minimized": False,
 }
 

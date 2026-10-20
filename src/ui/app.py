@@ -70,8 +70,25 @@ class SettingsApp(ctk.CTk):
         )
         title.grid(row=0, column=0, sticky="w")
 
+        header_actions = ctk.CTkFrame(header, fg_color="transparent")
+        header_actions.grid(row=0, column=1, sticky="e")
+
+        self.toggle_rpc_btn = ctk.CTkButton(
+            header_actions,
+            text="Отключить RPC",
+            font=FONTS["heading"],
+            fg_color=COLORS["danger"],
+            hover_color="#c44a4a",
+            text_color="#ffffff",
+            corner_radius=10,
+            height=36,
+            width=150,
+            command=self._toggle_rpc_power,
+        )
+        self.toggle_rpc_btn.pack(side="left", padx=(0, 8))
+
         self.status_pill = ctk.CTkLabel(
-            header,
+            header_actions,
             text="● Offline",
             font=FONTS["small"],
             text_color=COLORS["muted"],
@@ -80,7 +97,7 @@ class SettingsApp(ctk.CTk):
             padx=12,
             pady=6,
         )
-        self.status_pill.grid(row=0, column=1, sticky="e")
+        self.status_pill.pack(side="left")
 
         subtitle = ctk.CTkLabel(
             header,
@@ -90,6 +107,7 @@ class SettingsApp(ctk.CTk):
             anchor="w",
         )
         subtitle.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self._sync_toggle_button()
 
         left = ctk.CTkScrollableFrame(
             root,
@@ -128,6 +146,20 @@ class SettingsApp(ctk.CTk):
         )
         self.toast.grid(row=0, column=0, sticky="w")
 
+        footer_off = ctk.CTkButton(
+            footer,
+            text="Выключить Presence",
+            font=FONTS["heading"],
+            fg_color=COLORS["danger"],
+            hover_color="#c44a4a",
+            text_color="#ffffff",
+            corner_radius=10,
+            height=40,
+            width=170,
+            command=lambda: self._set_rpc_enabled(False),
+        )
+        footer_off.grid(row=0, column=1, sticky="e", padx=(8, 0))
+
         save_btn = ctk.CTkButton(
             footer,
             text="Сохранить",
@@ -140,7 +172,7 @@ class SettingsApp(ctk.CTk):
             width=140,
             command=self._save,
         )
-        save_btn.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        save_btn.grid(row=0, column=2, sticky="e", padx=(8, 0))
 
         apply_btn = ctk.CTkButton(
             footer,
@@ -156,7 +188,7 @@ class SettingsApp(ctk.CTk):
             width=120,
             command=self._apply,
         )
-        apply_btn.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        apply_btn.grid(row=0, column=3, sticky="e", padx=(8, 0))
 
     def _heading(self, parent, text: str) -> None:
         ctk.CTkLabel(
@@ -456,10 +488,49 @@ class SettingsApp(ctk.CTk):
                 ACTIVITY_PRESETS.get(mode, ACTIVITY_PRESETS["auto"])
             )
 
+    def _sync_toggle_button(self) -> None:
+        enabled = bool(self.cfg.get("enabled", True))
+        if "enabled" in self._vars and hasattr(self._vars["enabled"], "get"):
+            enabled = bool(self._vars["enabled"].get())
+        if enabled:
+            self.toggle_rpc_btn.configure(
+                text="Отключить RPC",
+                fg_color=COLORS["danger"],
+                hover_color="#c44a4a",
+            )
+        else:
+            self.toggle_rpc_btn.configure(
+                text="Включить RPC",
+                fg_color=COLORS["ok"],
+                hover_color="#3db872",
+            )
+
+    def _set_rpc_enabled(self, enabled: bool) -> None:
+        if "enabled" in self._vars and hasattr(self._vars["enabled"], "set"):
+            self._vars["enabled"].set(enabled)
+        self.cfg["enabled"] = enabled
+        self.cfg = self._collect()
+        self.cfg["enabled"] = enabled
+        save_config(self.cfg)
+        if self.on_toggle_rpc:
+            self.on_toggle_rpc(enabled)
+        elif self.on_save:
+            self.on_save(self.cfg)
+        self._sync_toggle_button()
+        self._refresh_preview()
+        self._flash("RPC выключен" if not enabled else "RPC включён")
+
+    def _toggle_rpc_power(self) -> None:
+        enabled = bool(self.cfg.get("enabled", True))
+        if "enabled" in self._vars and hasattr(self._vars["enabled"], "get"):
+            enabled = bool(self._vars["enabled"].get())
+        self._set_rpc_enabled(not enabled)
+
     def _apply(self) -> None:
         self.cfg = self._collect()
         if self.on_save:
             self.on_save(self.cfg)
+        self._sync_toggle_button()
         self._flash("Применено")
         self._refresh_preview()
 
@@ -468,6 +539,7 @@ class SettingsApp(ctk.CTk):
         save_config(self.cfg)
         if self.on_save:
             self.on_save(self.cfg)
+        self._sync_toggle_button()
         self._flash("Сохранено")
 
     def _flash(self, text: str) -> None:

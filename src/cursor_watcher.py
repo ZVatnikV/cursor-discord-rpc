@@ -252,9 +252,14 @@ def _clean_chat_title(raw: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return ""
-    # First sentence / line, keep it short for Discord
+    # First sentence, then first few words — Discord line is tiny
     text = text.split(". ")[0].strip()
-    return text[:48] + ("…" if len(text) > 48 else "")
+    words = text.split()
+    if len(words) > 6:
+        text = " ".join(words[:6])
+    if len(text) > 36:
+        text = text[:33].rstrip() + "…"
+    return text
 
 
 def _iter_transcripts(project: Optional[Path] = None) -> list[Path]:
