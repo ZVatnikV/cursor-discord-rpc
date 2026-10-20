@@ -1,4 +1,4 @@
-"""Live Cursor state from transcripts + recently touched workspace files."""
+"""Live Cursor state — driven by the newest agent transcript + disk mtimes."""
 
 from __future__ import annotations
 
@@ -22,36 +22,12 @@ TIMESTAMP_RE = re.compile(r"<timestamp>.*?</timestamp>", re.DOTALL | re.IGNORECA
 EDIT_TOOLS = {"Write", "StrReplace", "EditNotebook", "Delete"}
 READ_TOOLS = {"Read", "Grep", "Glob"}
 CODE_EXTS = {
-    ".py",
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".json",
-    ".md",
-    ".ps1",
-    ".css",
-    ".html",
-    ".cs",
-    ".go",
-    ".rs",
-    ".java",
-    ".cpp",
-    ".h",
-    ".yml",
-    ".yaml",
-    ".toml",
-    ".txt",
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".md", ".ps1", ".css",
+    ".html", ".cs", ".go", ".rs", ".java", ".cpp", ".h", ".yml", ".yaml",
+    ".toml", ".txt",
 }
 SKIP_DIR_NAMES = {
-    ".git",
-    "dist",
-    "build",
-    "node_modules",
-    "__pycache__",
-    ".venv",
-    "venv",
-    ".cursor",
+    ".git", "dist", "build", "node_modules", "__pycache__", ".venv", "venv", ".cursor",
 }
 
 
@@ -84,99 +60,74 @@ def _decode_file_uri(uri: str) -> str:
     return uri
 
 
-def _workspace_info() -> tuple[str, str]:
-    """Newest non-empty workspace folder from workspaceStorage."""
-    root = Path.home() / "AppData" / "Roaming" / "Cursor" / "User" / "workspaceStorage"
-    if not root.exists():
-        return "", ""
-    best: Optional[tuple[float, str, str]] = None
-    try:
-        for d in root.iterdir():
-            wj = d / "workspace.json"
-            if not wj.exists():
-                continue
-            try:
-                data = json.loads(wj.read_text(encoding="utf-8"))
-                m = wj.stat().st_mtime
-            except (OSError, json.JSONDecodeError):
-                continue
-            folder = data.get("folder") or ""
-            if not (isinstance(folder, str) and folder.startswith("file:///")):
-                continue
-            full = _decode_file_uri(folder)
-            name = Path(full).name
-            if not name:
-                continue
-            # Prefer recently touched state DB inside this workspace
-            db = d / "state.vscdb"
-            try:
-                if db.exists():
-                    m = max(m, db.stat().st_mtime)
-            except OSError:
-                pass
-            if best is None or m > best[0]:
-                best = (m, name, full)
-    except OSError:
-        return "", ""
-    if not best:
-        return "", ""
-    return best[1], best[2]
-
-
-def _project_dir(workspace_path: str) -> Optional[Path]:
-    root = Path.home() / ".cursor" / "projects"
-    if not root.exists() or not workspace_path:
+def _newest_transcript() -> Optional[Path]:
+    base = Path.home() / ".cursor" / "projects"
+    if not base.exists():
         return None
-    name = Path(workspace_path).name.lower().replace(" ", "-")
-    try:
-        matches = [
-            p
-            for p in root.iterdir()
-            if p.is_dir() and not p.name.startswith(".") and name in p.name.lower()
-        ]
-        if not matches:
-            return None
-        return max(
-            matches,
-            key=lambda p: max(
-                (
-                    f.stat().st_mtime
-                    for f in (p / "agent-transcripts").rglob("*.jsonl")
-                ),
-                default=p.stat().st_mtime,
-            ),
-        )
-    except OSError:
-        return None
-
-
-def _newest_transcript(project: Optional[Path]) -> Optional[Path]:
-    roots: list[Path] = []
-    if project is not None:
-        roots.append(project / "agent-transcripts")
-    else:
-        base = Path.home() / ".cursor" / "projects"
-        if base.exists():
-            try:
-                roots.extend(p / "agent-transcripts" for p in base.iterdir() if p.is_dir())
-            except OSError:
-                return None
     newest: Optional[Path] = None
     newest_mtime = 0.0
-    for root in roots:
-        if not root.exists():
-            continue
-        try:
-            for f in root.rglob("*.jsonl"):
-                try:
-                    m = f.stat().st_mtime
-                except OSError:
-                    continue
-                if m > newest_mtime:
-                    newest_mtime, newest = m, f
-        except OSError:
-            continue
+    try:
+        for f in base.rglob("*.jsonl"):
+            if "agent-transcripts" not in f.parts:
+                continue
+            try:
+                m = f.stat().st_mtime
+            except OSError:
+                continue
+            if m > newest_mtime:
+                newest_mtime, newest = m, f
+    except OSError:
+        return None
     return newest
+
+
+def _project_from_transcript(transcript: Path) -> Optional[Path]:
+    for parent in transcript.parents:
+        if parent.name == "agent-transcripts":
+            return parent.parent
+    return None
+
+
+def _workspace_path_from_project(project: Path) -> tuple[str, str]:
+    """Map Cursor project id → (name, full_path) via workspaceStorage or decode."""
+    root = Path.home() / "AppData" / "Roaming" / "Cursor" / "User" / "workspaceStorage"
+    pid = project.name.lower()
+    if root.exists():
+        try:
+            for d in root.iterdir():
+                wj = d / "workspace.json"
+                if not wj.exists():
+                    continue
+                try:
+                    data = json.loads(wj.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                folder = data.get("folder") or ""
+                if not (isinstance(folder, str) and folder.startswith("file:///")):
+                    continue
+                full = _decode_file_uri(folder)
+                # Encode path the same way Cursor does for project folders
+                encoded = re.sub(r"[^A-Za-z0-9]+", "-", full).strip("-").lower()
+                if encoded == pid or pid in encoded or encoded in pid:
+                    return Path(full).name, full
+                # Soft match on folder name
+                if Path(full).name.lower().replace(" ", "-") in pid:
+                    return Path(full).name, full
+        except OSError:
+            pass
+
+    # Fallback: humanize project id
+    name = project.name
+    for prefix in (
+        "c-Users-admin-Documents-",
+        "C-Users-admin-Documents-",
+        "d-SteamLibrary-steamapps-common-",
+    ):
+        if name.startswith(prefix) or name.lower().startswith(prefix.lower()):
+            name = name[len(prefix) :]
+            break
+    name = name.replace("-", " ")
+    return name, ""
 
 
 def _clean_chat_title(raw: str) -> str:
@@ -212,9 +163,8 @@ def _parse_transcript(path: Path) -> tuple[str, str, float]:
     try:
         transcript_mtime = path.stat().st_mtime
         raw = path.read_bytes()
-        if len(raw) > 150_000:
-            raw = raw[-150_000:]
-            text = raw.decode("utf-8", errors="ignore").split("\n", 1)[-1]
+        if len(raw) > 200_000:
+            text = raw[-200_000:].decode("utf-8", errors="ignore").split("\n", 1)[-1]
         else:
             text = raw.decode("utf-8", errors="ignore")
         lines = text.splitlines()
@@ -222,7 +172,6 @@ def _parse_transcript(path: Path) -> tuple[str, str, float]:
         return "", "", 0.0
 
     chat_first = ""
-    chat_last = ""
     edit_file = ""
     read_file = ""
 
@@ -236,16 +185,15 @@ def _parse_transcript(path: Path) -> tuple[str, str, float]:
             continue
 
         role = str(obj.get("role") or "").lower()
-        if role in ("user", "human"):
-            parts = []
-            for part in _message_parts(obj):
-                if isinstance(part, dict) and part.get("type") == "text":
-                    parts.append(str(part.get("text") or ""))
+        if role in ("user", "human") and not chat_first:
+            parts = [
+                str(p.get("text") or "")
+                for p in _message_parts(obj)
+                if isinstance(p, dict) and p.get("type") == "text"
+            ]
             title = _clean_chat_title("\n".join(parts)) if parts else ""
             if title:
-                if not chat_first:
-                    chat_first = title
-                chat_last = title
+                chat_first = title
 
         for part in _message_parts(obj):
             if not isinstance(part, dict) or part.get("type") != "tool_use":
@@ -265,12 +213,10 @@ def _parse_transcript(path: Path) -> tuple[str, str, float]:
             elif name in READ_TOOLS:
                 read_file = fname
 
-    chat = chat_first or chat_last
-    return chat, (edit_file or read_file), transcript_mtime
+    return chat_first, (edit_file or read_file), transcript_mtime
 
 
 def _recent_workspace_file(workspace_path: str, max_age_sec: float = 900) -> tuple[str, float]:
-    """Most recently modified code file in the workspace."""
     if not workspace_path:
         return "", 0.0
     root = Path(workspace_path)
@@ -300,25 +246,13 @@ def _recent_workspace_file(workspace_path: str, max_age_sec: float = 900) -> tup
     return newest_name, newest_mtime
 
 
-def _pick_file(
-    tool_file: str,
-    transcript_mtime: float,
-    disk_file: str,
-    disk_mtime: float,
-) -> str:
-    """Disk wins if the file was touched after the transcript; else AI tool path."""
-    if disk_file and disk_mtime > (transcript_mtime or 0):
-        return disk_file
-    if tool_file:
-        return tool_file
-    return disk_file
-
-
 class CursorWatcher:
     def __init__(self) -> None:
         self._state = CursorState()
         self._last_file = ""
         self._last_chat = ""
+        self._last_ws = ""
+        self._last_ws_path = ""
 
     @property
     def state(self) -> CursorState:
@@ -326,42 +260,46 @@ class CursorWatcher:
 
     def refresh(self) -> CursorState:
         running = is_cursor_running()
-        ws_name, ws_path = _workspace_info()
         chat, file_name, activity = "", "", "В Cursor"
+        ws_name, ws_path = "", ""
 
         if running:
-            project = _project_dir(ws_path)
-            transcript = _newest_transcript(project) or _newest_transcript(None)
-            tool_file, t_mtime = "", 0.0
+            transcript = _newest_transcript()
+            t_mtime = 0.0
+            tool_file = ""
             if transcript is not None:
+                project = _project_from_transcript(transcript)
+                if project is not None:
+                    ws_name, ws_path = _workspace_path_from_project(project)
                 chat, tool_file, t_mtime = _parse_transcript(transcript)
 
             disk_file, disk_mtime = _recent_workspace_file(ws_path)
-            file_name = _pick_file(tool_file, t_mtime, disk_file, disk_mtime)
+            if disk_file and disk_mtime > (t_mtime or 0):
+                file_name = disk_file
+            else:
+                file_name = tool_file or disk_file
 
             age = time.time() - t_mtime if t_mtime else 9999
             disk_age = time.time() - disk_mtime if disk_mtime else 9999
-            if age < 90 or disk_age < 90:
-                if file_name:
-                    activity = "Редактирует файл"
-                elif chat:
-                    activity = "Чат с AI"
-                else:
-                    activity = "В Cursor"
+            if age < 120 or disk_age < 120:
+                activity = "Редактирует файл" if file_name else ("Чат с AI" if chat else "В Cursor")
             elif file_name:
                 activity = "Редактирует файл"
             elif chat:
                 activity = "Чат с AI"
 
-            # Sticky: don't blank out file/chat on brief misses
             if file_name:
                 self._last_file = file_name
-            elif self._last_file:
+            else:
                 file_name = self._last_file
             if chat:
                 self._last_chat = chat
-            elif self._last_chat:
+            else:
                 chat = self._last_chat
+            if ws_name:
+                self._last_ws, self._last_ws_path = ws_name, ws_path
+            else:
+                ws_name, ws_path = self._last_ws, self._last_ws_path
 
         self._state = CursorState(
             running=running,
