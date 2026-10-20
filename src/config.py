@@ -10,8 +10,8 @@ from typing import Any
 APP_NAME = "Cursor Discord RPC"
 APP_VERSION = "1.0.0"
 REPO_URL = "https://github.com/ItzHanchik/cursor-discord-rpc"
-# Paste your Application ID from https://discord.com/developers/applications
-DISCORD_CLIENT_ID_DEFAULT = ""
+# Default Discord Application (override in settings if needed)
+DISCORD_CLIENT_ID_DEFAULT = "1562085628630540318"
 
 CONFIG_DIR = Path.home() / ".cursor-discord-rpc"
 CONFIG_PATH = CONFIG_DIR / "config.json"

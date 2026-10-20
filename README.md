@@ -30,10 +30,10 @@
 
 ### 1. Discord Application
 
-1. Открой [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**
-2. Имя, например `Cursor`
-3. Скопируй **Application ID** (Client ID)
-4. *(Опционально)* Rich Presence → Art Assets → загрузи картинку с ключом `cursor`
+По умолчанию используется приложение автора (`1562085628630540318`).  
+Свой Client ID можно вписать в настройках в любой момент.
+
+*(Опционально для своей app)* [Developer Portal](https://discord.com/developers/applications) → Rich Presence → Art Assets → ключ `cursor`.
 
 ### 2. Запуск
 
@@ -49,8 +49,6 @@ dist\CursorDiscordRPC.exe
 pip install -r requirements.txt
 python run.py
 ```
-
-Вставь Client ID в настройках → **Сохранить**.
 
 ### 3. Автозапуск
 
@@ -72,7 +70,7 @@ python run.py
 | Активность | Авто из Cursor или пресеты / свой текст |
 | Файл / проект / чат | Что писать во второй строке Presence |
 | Кнопка | Label + URL (по умолчанию этот репозиторий) |
-| Client ID | Твоё Discord Application |
+| Client ID | По умолчанию app автора; можно заменить на свой |
 
 Конфиг лежит в `%USERPROFILE%\.cursor-discord-rpc\config.json`.
 
