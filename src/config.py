@@ -23,7 +23,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "show_chat": True,
     "show_elapsed": True,
     "button_enabled": True,
-    "button_label": "GitHub",
+    "button_label": "GitLab",
     "button_url": REPO_URL,
     "autostart": True,
     "only_when_cursor_running": True,
