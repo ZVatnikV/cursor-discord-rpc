@@ -158,24 +158,49 @@ def _message_parts(obj: dict[str, Any]) -> list[Any]:
     return content if isinstance(content, list) else []
 
 
+def _extract_chat_title_from_line(line: str) -> str:
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return ""
+    if str(obj.get("role") or "").lower() not in ("user", "human"):
+        return ""
+    parts = [
+        str(p.get("text") or "")
+        for p in _message_parts(obj)
+        if isinstance(p, dict) and p.get("type") == "text"
+    ]
+    return _clean_chat_title("\n".join(parts)) if parts else ""
+
+
 def _parse_transcript(path: Path) -> tuple[str, str, float]:
-    """chat, file, transcript_mtime"""
+    """chat (from file HEAD), file (from file TAIL), transcript_mtime"""
     try:
         transcript_mtime = path.stat().st_mtime
-        raw = path.read_bytes()
-        if len(raw) > 200_000:
-            text = raw[-200_000:].decode("utf-8", errors="ignore").split("\n", 1)[-1]
-        else:
-            text = raw.decode("utf-8", errors="ignore")
-        lines = text.splitlines()
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            head = fh.read(80_000).decode("utf-8", errors="ignore")
+            if size > 200_000:
+                fh.seek(-200_000, 2)
+                tail = fh.read().decode("utf-8", errors="ignore").split("\n", 1)[-1]
+            else:
+                tail = head
     except OSError:
         return "", "", 0.0
 
     chat_first = ""
+    for line in head.splitlines()[:80]:
+        line = line.strip()
+        if not line:
+            continue
+        title = _extract_chat_title_from_line(line)
+        if title:
+            chat_first = title
+            break
+
     edit_file = ""
     read_file = ""
-
-    for line in lines:
+    for line in tail.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -183,18 +208,6 @@ def _parse_transcript(path: Path) -> tuple[str, str, float]:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
-
-        role = str(obj.get("role") or "").lower()
-        if role in ("user", "human") and not chat_first:
-            parts = [
-                str(p.get("text") or "")
-                for p in _message_parts(obj)
-                if isinstance(p, dict) and p.get("type") == "text"
-            ]
-            title = _clean_chat_title("\n".join(parts)) if parts else ""
-            if title:
-                chat_first = title
-
         for part in _message_parts(obj):
             if not isinstance(part, dict) or part.get("type") != "tool_use":
                 continue
