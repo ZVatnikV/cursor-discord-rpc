@@ -5,78 +5,43 @@
 <h1 align="center">Cursor Discord RPC</h1>
 
 <p align="center">
-  Красивый Discord Rich Presence для <b>Cursor IDE</b> — одним EXE, с тёмным интерфейсом настроек.
+  Простой Discord Rich Presence для Cursor — один EXE, минимум настроек.
 </p>
 
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows-0b0f14?style=flat-square">
-  <img alt="python" src="https://img.shields.io/badge/python-3.12+-3dd6c6?style=flat-square&labelColor=0b0f14">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-8b9bb0?style=flat-square&labelColor=0b0f14">
 </p>
 
----
+## Как выглядит
 
-## Что умеет
+Discord официально даёт **только 2 строки**:
 
-- Показывает в Discord, что ты делаешь в Cursor: **редактирует файл**, **пишет код**, **чат с AI**, и т.д.
-- Можно включить/выключить: активность, файл, проект, **название чата**, таймер сессии
-- Кнопка на репозиторий — **добавить или убрать** из интерфейса
-- Автозапуск вместе с Windows (удобно держать рядом с Cursor)
-- Presence только пока Cursor запущен
-- Системный трей + красивое окно настроек
-- Собирается в **один EXE**
+| Поле | Пример |
+|------|--------|
+| details | `Редактирует файл · rpc_client.py` |
+| state | `Создай прогу для RPC… · cursor discord rpc` |
 
-## Быстрый старт
++ таймер + кнопка GitHub (**кнопку видят только другие**, не ты сам — ограничение Discord).
 
-### 1. Discord Application
+## Установка
 
-По умолчанию используется приложение автора (`1562085628630540318`).  
-Свой Client ID можно вписать в настройках в любой момент.
+1. Скачай [CursorDiscordRPC.exe](https://github.com/ItzHanchik/cursor-discord-rpc/releases/latest)
+2. Закрой старые копии (трей → Выход)
+3. Запусти EXE — Client ID уже вшит
+4. *(Опционально)* в [Developer Portal](https://discord.com/developers/applications) у приложения загрузи Art Asset с ключом `cursor`
 
-*(Опционально для своей app)* [Developer Portal](https://discord.com/developers/applications) → Rich Presence → Art Assets → ключ `cursor`.
+## Настройки
 
-### 2. Запуск
+- Вкл/выкл RPC одной кнопкой
+- Файл / чат / проект / таймер / кнопка / автозапуск
+- Трей: настройки, отключить, выход
 
-**Готовый EXE** (после сборки):
-
-```text
-dist\CursorDiscordRPC.exe
-```
-
-Или из исходников:
-
-```bash
-pip install -r requirements.txt
-python run.py
-```
-
-### 3. Автозапуск
-
-В интерфейсе включи **«Автозапуск с Windows / Cursor»** — ярлык появится в Startup.  
-Приложение сидит в трее; ПКМ → «Открыть настройки».
-
-## Сборка одного EXE
+## Сборка
 
 ```powershell
 .\scripts\build_exe.ps1
 ```
-
-Результат: `dist\CursorDiscordRPC.exe`
-
-## Настройки
-
-| Опция | Описание |
-|--------|----------|
-| Активность | Авто из Cursor или пресеты / свой текст |
-| Файл / проект / чат | Что писать во второй строке Presence |
-| Кнопка | Label + URL (по умолчанию этот репозиторий) |
-| Client ID | По умолчанию app автора; можно заменить на свой |
-
-Конфиг лежит в `%USERPROFILE%\.cursor-discord-rpc\config.json`.
-
-## Стек
-
-- Python 3.12 · CustomTkinter · pypresence · pystray · PyInstaller
 
 ## Лицензия
 

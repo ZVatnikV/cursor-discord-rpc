@@ -1,11 +1,10 @@
-"""Background service: watch Cursor, push Discord presence, tray icon."""
+"""Background service: watch Cursor, push Discord presence, tray."""
 
 from __future__ import annotations
 
 import logging
 import sys
 import threading
-import time
 from typing import Any, Optional
 
 from . import autostart
@@ -26,7 +25,7 @@ class RPCService:
         self._status_ok = False
         self._status_msg = "Starting"
         self._lock = threading.Lock()
-        self.app = None  # SettingsApp, set later
+        self.app = None
         self._tray = None
 
     def get_live_state(self):
@@ -38,13 +37,13 @@ class RPCService:
     def apply_config(self, cfg: dict[str, Any]) -> None:
         with self._lock:
             old_id = str(self.cfg.get("discord_client_id") or "")
-            was_enabled = bool(self.cfg.get("enabled", True))
+            was = bool(self.cfg.get("enabled", True))
             self.cfg = dict(cfg)
             save_config(self.cfg)
             new_id = str(self.cfg.get("discord_client_id") or "")
             if new_id != old_id:
                 self.rpc.reconnect(new_id)
-            if was_enabled and not self.cfg.get("enabled", True):
+            if was and not self.cfg.get("enabled", True):
                 self.rpc.clear()
                 self._status_ok = False
                 self._status_msg = "Disabled"
@@ -93,29 +92,26 @@ class RPCService:
                 elif cfg.get("only_when_cursor_running", True) and not state.running:
                     self.rpc.clear()
                     self._status_ok = False
-                    self._status_msg = "Waiting for Cursor"
+                    self._status_msg = "Waiting Cursor"
                 else:
                     ok = self.rpc.update(cfg, state)
                     self._status_ok = ok
                     self._status_msg = "Connected" if ok else "Discord offline"
             except Exception as exc:
-                log.exception("RPC loop error: %s", exc)
+                log.exception("loop: %s", exc)
                 self._status_ok = False
                 self._status_msg = "Error"
-            self._stop.wait(3.0)
+            self._stop.wait(2.0)
 
-    # ── tray ────────────────────────────────────────────────
     def run_tray_and_ui(self, start_minimized: bool = False) -> None:
         from PIL import Image, ImageDraw
 
         from .ui.app import SettingsApp
 
-        # Simple teal icon
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         draw.rounded_rectangle((4, 4, 60, 60), radius=14, fill=(61, 214, 198, 255))
         draw.rectangle((18, 22, 46, 42), outline=(7, 16, 24, 255), width=3)
-        draw.line((24, 48, 40, 48), fill=(7, 16, 24, 255), width=3)
 
         self.app = SettingsApp(
             config=self.cfg,
@@ -125,23 +121,20 @@ class RPCService:
             get_rpc_status=self.get_rpc_status,
             start_minimized=start_minimized or bool(self.cfg.get("start_minimized")),
         )
-
         self.start()
 
-        def on_open(_icon=None, _item=None):
+        def on_open(_i=None, _item=None):
             self.app.after(0, self.app.show_window)
 
-        def on_disable(_icon=None, _item=None):
+        def on_off(_i=None, _item=None):
             self.set_enabled(False)
-            if self.app is not None:
-                self.app.after(0, lambda: self.app._set_rpc_enabled(False))
+            self.app.after(0, lambda: self.app._set_enabled(False))
 
-        def on_enable(_icon=None, _item=None):
+        def on_on(_i=None, _item=None):
             self.set_enabled(True)
-            if self.app is not None:
-                self.app.after(0, lambda: self.app._set_rpc_enabled(True))
+            self.app.after(0, lambda: self.app._set_enabled(True))
 
-        def on_quit(_icon=None, _item=None):
+        def on_quit(_i=None, _item=None):
             self.stop()
             self.app.after(0, self.app.destroy_app)
 
@@ -150,15 +143,15 @@ class RPCService:
             from pystray import MenuItem as Item
 
             menu = pystray.Menu(
-                Item("Открыть настройки", on_open, default=True),
-                Item("Отключить RPC", on_disable),
-                Item("Включить RPC", on_enable),
+                Item("Настройки", on_open, default=True),
+                Item("Отключить RPC", on_off),
+                Item("Включить RPC", on_on),
                 Item("Выход", on_quit),
             )
             self._tray = pystray.Icon("cursor_discord_rpc", img, APP_NAME, menu)
             threading.Thread(target=self._tray.run, daemon=True).start()
         except Exception as exc:
-            log.warning("Tray unavailable: %s", exc)
+            log.warning("Tray: %s", exc)
 
         self.app.mainloop()
         self.stop()
