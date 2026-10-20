@@ -7,7 +7,6 @@ import argparse
 import sys
 from pathlib import Path
 
-# Ensure project root is on sys.path when frozen/dev
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -23,8 +22,17 @@ def main() -> int:
     args = parser.parse_args()
 
     from src.service import RPCService, configure_logging
+    from src.single_instance import acquire_lock, kill_other_instances
 
     configure_logging()
+    killed = kill_other_instances()
+    if killed:
+        print(f"Killed {killed} old RPC instance(s)")
+    if not acquire_lock():
+        # Another copy just won the race — exit quietly
+        print("Already running")
+        return 0
+
     service = RPCService()
     service.run_tray_and_ui(start_minimized=args.minimized)
     return 0

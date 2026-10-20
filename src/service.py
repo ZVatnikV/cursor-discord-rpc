@@ -101,7 +101,7 @@ class RPCService:
                 log.exception("loop: %s", exc)
                 self._status_ok = False
                 self._status_msg = "Error"
-            self._stop.wait(2.0)
+            self._stop.wait(1.5)
 
     def run_tray_and_ui(self, start_minimized: bool = False) -> None:
         from PIL import Image, ImageDraw

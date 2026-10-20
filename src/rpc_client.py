@@ -1,4 +1,4 @@
-"""Discord Rich Presence — official fields only: details + state (+ buttons)."""
+"""Discord Rich Presence — always push fresh data on a short interval."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from .config import REPO_URL
 from .cursor_watcher import CursorState
 
 log = logging.getLogger(__name__)
-FORCE_REFRESH_SEC = 12
+MIN_PUSH_SEC = 2.0
 
 
 def _clip(text: str, n: int) -> str:
@@ -29,6 +29,7 @@ class DiscordRPC:
         self._last_payload: dict[str, Any] = {}
         self._last_push = 0.0
         self._skip_image = False
+        self._tick = 0
 
     @property
     def connected(self) -> bool:
@@ -85,12 +86,6 @@ class DiscordRPC:
         self._last_push = 0.0
 
     def build_presence(self, cfg: dict[str, Any], state: CursorState) -> dict[str, Any]:
-        """
-        Discord allows only TWO text lines (docs.discord.com):
-          details = what you're doing
-          state   = context (chat / project)
-        Buttons exist but YOU cannot see them — only others.
-        """
         activity = state.activity_label or "В Cursor"
         file_name = state.file_name if cfg.get("show_file", True) else ""
         workspace = state.workspace if cfg.get("show_workspace", True) else ""
@@ -98,13 +93,11 @@ class DiscordRPC:
         if cfg.get("show_chat", True):
             chat = (cfg.get("manual_chat_name") or "").strip() or state.chat_name
 
-        # Line 1: activity + file
         if file_name:
             details = _clip(f"{activity} · {file_name}", 128)
         else:
             details = _clip(activity, 128)
 
-        # Line 2: chat first (what user asked for), then project
         if chat and workspace:
             state_text = _clip(f"{chat} · {workspace}", 128)
         elif chat:
@@ -121,7 +114,7 @@ class DiscordRPC:
 
         if not self._skip_image:
             payload["large_image"] = cfg.get("large_image_key") or "cursor"
-            payload["large_text"] = _clip(workspace or "Cursor IDE", 128)
+            payload["large_text"] = _clip(workspace or chat or "Cursor IDE", 128)
 
         if cfg.get("show_elapsed", True):
             if self._start_ts is None:
@@ -144,15 +137,26 @@ class DiscordRPC:
 
         payload = self.build_presence(cfg, state)
         now = time.time()
-        stale = (now - self._last_push) >= FORCE_REFRESH_SEC
-        if payload == self._last_payload and not stale:
+        # Always re-push when content changed; otherwise every MIN_PUSH_SEC
+        content_key = (payload.get("details"), payload.get("state"))
+        last_key = (
+            self._last_payload.get("details"),
+            self._last_payload.get("state"),
+        )
+        if content_key == last_key and (now - self._last_push) < MIN_PUSH_SEC:
             return True
 
         try:
             self._rpc.update(**payload)
             self._last_payload = payload
             self._last_push = now
-            log.info("RPC → %r | %r", payload.get("details"), payload.get("state"))
+            self._tick += 1
+            log.info(
+                "RPC #%s → %r | %r",
+                self._tick,
+                payload.get("details"),
+                payload.get("state"),
+            )
             return True
         except Exception as exc:
             log.warning("RPC update failed: %s", exc)
