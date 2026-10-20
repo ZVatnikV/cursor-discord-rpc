@@ -1,4 +1,4 @@
-"""Live Cursor state — driven by the newest agent transcript + disk mtimes."""
+"""Live Cursor state from the newest agent transcript."""
 
 from __future__ import annotations
 
@@ -40,6 +40,14 @@ class CursorState:
     chat_name: str = ""
     activity_label: str = "В Cursor"
     updated_at: float = field(default_factory=time.time)
+
+
+@dataclass
+class _Parsed:
+    chat_latest: str = ""
+    file_name: str = ""
+    kind: str = "idle"  # editing | reading | chatting | shell | idle
+    transcript_mtime: float = 0.0
 
 
 def is_cursor_running() -> bool:
@@ -89,7 +97,6 @@ def _project_from_transcript(transcript: Path) -> Optional[Path]:
 
 
 def _workspace_path_from_project(project: Path) -> tuple[str, str]:
-    """Map Cursor project id → (name, full_path) via workspaceStorage or decode."""
     root = Path.home() / "AppData" / "Roaming" / "Cursor" / "User" / "workspaceStorage"
     pid = project.name.lower()
     if root.exists():
@@ -106,28 +113,24 @@ def _workspace_path_from_project(project: Path) -> tuple[str, str]:
                 if not (isinstance(folder, str) and folder.startswith("file:///")):
                     continue
                 full = _decode_file_uri(folder)
-                # Encode path the same way Cursor does for project folders
                 encoded = re.sub(r"[^A-Za-z0-9]+", "-", full).strip("-").lower()
                 if encoded == pid or pid in encoded or encoded in pid:
                     return Path(full).name, full
-                # Soft match on folder name
                 if Path(full).name.lower().replace(" ", "-") in pid:
                     return Path(full).name, full
         except OSError:
             pass
 
-    # Fallback: humanize project id
     name = project.name
     for prefix in (
         "c-Users-admin-Documents-",
         "C-Users-admin-Documents-",
         "d-SteamLibrary-steamapps-common-",
     ):
-        if name.startswith(prefix) or name.lower().startswith(prefix.lower()):
+        if name.lower().startswith(prefix.lower()):
             name = name[len(prefix) :]
             break
-    name = name.replace("-", " ")
-    return name, ""
+    return name.replace("-", " "), ""
 
 
 def _clean_chat_title(raw: str) -> str:
@@ -158,13 +161,7 @@ def _message_parts(obj: dict[str, Any]) -> list[Any]:
     return content if isinstance(content, list) else []
 
 
-def _extract_chat_title_from_line(line: str) -> str:
-    try:
-        obj = json.loads(line)
-    except json.JSONDecodeError:
-        return ""
-    if str(obj.get("role") or "").lower() not in ("user", "human"):
-        return ""
+def _user_text(obj: dict[str, Any]) -> str:
     parts = [
         str(p.get("text") or "")
         for p in _message_parts(obj)
@@ -173,33 +170,25 @@ def _extract_chat_title_from_line(line: str) -> str:
     return _clean_chat_title("\n".join(parts)) if parts else ""
 
 
-def _parse_transcript(path: Path) -> tuple[str, str, float]:
-    """chat (from file HEAD), file (from file TAIL), transcript_mtime"""
+def _parse_transcript(path: Path) -> _Parsed:
+    out = _Parsed()
     try:
-        transcript_mtime = path.stat().st_mtime
+        out.transcript_mtime = path.stat().st_mtime
         size = path.stat().st_size
         with path.open("rb") as fh:
-            head = fh.read(80_000).decode("utf-8", errors="ignore")
-            if size > 200_000:
-                fh.seek(-200_000, 2)
+            if size > 250_000:
+                fh.seek(-250_000, 2)
                 tail = fh.read().decode("utf-8", errors="ignore").split("\n", 1)[-1]
             else:
-                tail = head
+                tail = fh.read().decode("utf-8", errors="ignore")
     except OSError:
-        return "", "", 0.0
+        return out
 
-    chat_first = ""
-    for line in head.splitlines()[:80]:
-        line = line.strip()
-        if not line:
-            continue
-        title = _extract_chat_title_from_line(line)
-        if title:
-            chat_first = title
-            break
+    last_edit = ""
+    last_read = ""
+    last_kind = "idle"
+    last_user = ""
 
-    edit_file = ""
-    read_file = ""
     for line in tail.splitlines():
         line = line.strip()
         if not line:
@@ -208,6 +197,14 @@ def _parse_transcript(path: Path) -> tuple[str, str, float]:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
+
+        role = str(obj.get("role") or "").lower()
+        if role in ("user", "human"):
+            title = _user_text(obj)
+            if title:
+                last_user = title
+                last_kind = "chatting"
+
         for part in _message_parts(obj):
             if not isinstance(part, dict) or part.get("type") != "tool_use":
                 continue
@@ -216,20 +213,34 @@ def _parse_transcript(path: Path) -> tuple[str, str, float]:
             if not isinstance(inp, dict):
                 continue
             raw_path = inp.get("path") or inp.get("target_file") or ""
-            if not isinstance(raw_path, str) or not raw_path.strip():
-                continue
-            fname = Path(raw_path.replace("\\", "/")).name
-            if not fname or "." not in fname:
-                continue
-            if name in EDIT_TOOLS:
-                edit_file = fname
-            elif name in READ_TOOLS:
-                read_file = fname
+            fname = ""
+            if isinstance(raw_path, str) and raw_path.strip():
+                fname = Path(raw_path.replace("\\", "/")).name
 
-    return chat_first, (edit_file or read_file), transcript_mtime
+            if name in EDIT_TOOLS and fname and "." in fname:
+                last_edit = fname
+                last_kind = "editing"
+            elif name in READ_TOOLS and fname and "." in fname:
+                last_read = fname
+                last_kind = "reading"
+            elif name == "Shell":
+                last_kind = "shell"
+            elif name and last_kind not in ("editing", "reading"):
+                last_kind = "chatting"
+
+    out.chat_latest = last_user
+    # File only when the latest action was actually a file tool
+    if last_kind == "editing":
+        out.file_name = last_edit
+    elif last_kind == "reading":
+        out.file_name = last_read or last_edit
+    else:
+        out.file_name = ""
+    out.kind = last_kind
+    return out
 
 
-def _recent_workspace_file(workspace_path: str, max_age_sec: float = 900) -> tuple[str, float]:
+def _recent_workspace_file(workspace_path: str, max_age_sec: float = 120) -> tuple[str, float]:
     if not workspace_path:
         return "", 0.0
     root = Path(workspace_path)
@@ -259,13 +270,18 @@ def _recent_workspace_file(workspace_path: str, max_age_sec: float = 900) -> tup
     return newest_name, newest_mtime
 
 
+def _activity_label(kind: str) -> str:
+    return {
+        "editing": "Редактирует файл",
+        "reading": "Читает файл",
+        "shell": "Выполняет команды",
+        "chatting": "Чат с AI",
+    }.get(kind, "В Cursor")
+
+
 class CursorWatcher:
     def __init__(self) -> None:
         self._state = CursorState()
-        self._last_file = ""
-        self._last_chat = ""
-        self._last_ws = ""
-        self._last_ws_path = ""
 
     @property
     def state(self) -> CursorState:
@@ -273,46 +289,29 @@ class CursorWatcher:
 
     def refresh(self) -> CursorState:
         running = is_cursor_running()
-        chat, file_name, activity = "", "", "В Cursor"
         ws_name, ws_path = "", ""
+        chat, file_name, activity = "", "", "В Cursor"
 
         if running:
             transcript = _newest_transcript()
-            t_mtime = 0.0
-            tool_file = ""
+            parsed = _Parsed()
             if transcript is not None:
                 project = _project_from_transcript(transcript)
                 if project is not None:
                     ws_name, ws_path = _workspace_path_from_project(project)
-                chat, tool_file, t_mtime = _parse_transcript(transcript)
+                parsed = _parse_transcript(transcript)
 
             disk_file, disk_mtime = _recent_workspace_file(ws_path)
-            if disk_file and disk_mtime > (t_mtime or 0):
+            kind = parsed.kind
+            file_name = parsed.file_name
+
+            # Manual/disk edit wins only if newer than transcript
+            if disk_file and disk_mtime > (parsed.transcript_mtime or 0):
                 file_name = disk_file
-            else:
-                file_name = tool_file or disk_file
+                kind = "editing"
 
-            age = time.time() - t_mtime if t_mtime else 9999
-            disk_age = time.time() - disk_mtime if disk_mtime else 9999
-            if age < 120 or disk_age < 120:
-                activity = "Редактирует файл" if file_name else ("Чат с AI" if chat else "В Cursor")
-            elif file_name:
-                activity = "Редактирует файл"
-            elif chat:
-                activity = "Чат с AI"
-
-            if file_name:
-                self._last_file = file_name
-            else:
-                file_name = self._last_file
-            if chat:
-                self._last_chat = chat
-            else:
-                chat = self._last_chat
-            if ws_name:
-                self._last_ws, self._last_ws_path = ws_name, ws_path
-            else:
-                ws_name, ws_path = self._last_ws, self._last_ws_path
+            chat = parsed.chat_latest
+            activity = _activity_label(kind)
 
         self._state = CursorState(
             running=running,

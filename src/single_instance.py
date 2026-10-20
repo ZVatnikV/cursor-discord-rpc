@@ -37,10 +37,13 @@ def kill_other_instances() -> int:
             pid = proc.info["pid"]
             if pid == me:
                 continue
-            name = (proc.info.get("name") or "").lower()
+            name = (proc.info.get("name") or "").lower().replace(" ", "")
             cmdline = " ".join(proc.info.get("cmdline") or []).lower()
-            is_rpc = name.startswith("cursordiscordrpc") or (
-                "run.py" in cmdline and "cursor" in cmdline and "discord" in cmdline
+            exe = (proc.info.get("exe") or "").lower()
+            is_rpc = (
+                "cursordiscordrpc" in name
+                or "cursordiscordrpc" in exe
+                or ("run.py" in cmdline and "discord" in cmdline and "rpc" in cmdline)
             )
             if not is_rpc:
                 continue
