@@ -14,17 +14,22 @@ log = logging.getLogger(__name__)
 
 class DiscordRPC:
     def __init__(self, client_id: str) -> None:
-        self.client_id = client_id
+        self.client_id = str(client_id or "").strip()
         self._rpc = None
         self._connected = False
         self._start_ts: Optional[int] = None
         self._last_payload: dict[str, Any] = {}
+        self._skip_image = False
 
     @property
     def connected(self) -> bool:
         return self._connected
 
     def connect(self) -> bool:
+        if not self.client_id:
+            log.warning("Discord RPC connect failed: empty Client ID")
+            self._connected = False
+            return False
         try:
             from pypresence import Presence
 
@@ -32,7 +37,7 @@ class DiscordRPC:
             self._rpc.connect()
             self._connected = True
             self._start_ts = int(time.time())
-            log.info("Connected to Discord RPC")
+            log.info("Connected to Discord RPC as %s", self.client_id)
             return True
         except Exception as exc:
             log.warning("Discord RPC connect failed: %s", exc)
@@ -56,7 +61,8 @@ class DiscordRPC:
 
     def reconnect(self, client_id: str) -> bool:
         self.disconnect()
-        self.client_id = client_id
+        self.client_id = str(client_id or "").strip()
+        self._skip_image = False
         return self.connect()
 
     def clear(self) -> None:
@@ -112,9 +118,11 @@ class DiscordRPC:
         payload: dict[str, Any] = {
             "details": details,
             "state": state_text,
-            "large_image": cfg.get("large_image_key") or "cursor",
-            "large_text": cfg.get("large_image_text") or "Cursor IDE",
         }
+
+        if not self._skip_image:
+            payload["large_image"] = cfg.get("large_image_key") or "cursor"
+            payload["large_text"] = cfg.get("large_image_text") or "Cursor IDE"
 
         if cfg.get("show_elapsed", True):
             if self._start_ts is None:
@@ -122,10 +130,12 @@ class DiscordRPC:
             payload["start"] = self._start_ts
 
         if cfg.get("button_enabled", True):
-            label = (cfg.get("button_label") or "GitHub")[:32]
+            label = (cfg.get("button_label") or "GitHub").strip()[:32] or "GitHub"
             url = (cfg.get("button_url") or REPO_URL).strip()
-            if url.startswith("http"):
-                payload["buttons"] = [{"label": label, "url": url}]
+            if not url.startswith("http"):
+                url = REPO_URL
+            # Discord allows max 2 buttons; label 1–32 chars
+            payload["buttons"] = [{"label": label, "url": url}]
 
         return payload
 
@@ -141,8 +151,27 @@ class DiscordRPC:
         try:
             self._rpc.update(**payload)
             self._last_payload = payload
+            log.info(
+                "RPC updated details=%r state=%r buttons=%s",
+                payload.get("details"),
+                payload.get("state"),
+                bool(payload.get("buttons")),
+            )
             return True
         except Exception as exc:
-            log.warning("RPC update failed: %s", exc)
+            log.warning("RPC update failed: %s | payload keys=%s", exc, list(payload))
+            # Missing art asset often breaks the whole activity — retry without image
+            if "large_image" in payload and not self._skip_image:
+                self._skip_image = True
+                self._last_payload = {}
+                try:
+                    payload2 = self.build_presence(cfg, state)
+                    self._rpc.update(**payload2)
+                    self._last_payload = payload2
+                    log.info("RPC updated without large_image")
+                    return True
+                except Exception as exc2:
+                    log.warning("RPC retry failed: %s", exc2)
             self._connected = False
+            self._last_payload = {}
             return False

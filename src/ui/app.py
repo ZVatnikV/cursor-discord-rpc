@@ -264,6 +264,16 @@ class SettingsApp(ctk.CTk):
         self._switch(parent, "button_enabled", "Показывать кнопку")
         self._entry(parent, "button_label", "Текст кнопки", "GitHub")
         self._entry(parent, "button_url", "Ссылка", REPO_URL)
+        tip = ctk.CTkLabel(
+            parent,
+            text="Discord не показывает кнопку тебе самому — её видят друзья в твоём профиле.",
+            font=FONTS["small"],
+            text_color=COLORS["muted"],
+            anchor="w",
+            wraplength=420,
+            justify="left",
+        )
+        tip.pack(fill="x", padx=16, pady=(2, 4))
 
     def _section_system(self, parent) -> None:
         self._heading(parent, "Система")
