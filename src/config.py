@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "Cursor Discord RPC"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 DISCORD_CLIENT_ID = "1562085628630540318"
 REPO_URL = "https://github.com/ZVatnikV/cursor-discord-rpc"
@@ -19,7 +19,7 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 DEFAULTS: dict[str, Any] = {
     "discord_client_id": DISCORD_CLIENT_ID,
     "enabled": True,
-    "language": "ru",  # ru | en
+    "language": "en",  # en | ru
     "show_elapsed": True,
     "button_enabled": True,
     "button_label": "GitHub",
@@ -50,8 +50,8 @@ def load_config() -> dict[str, Any]:
         cfg["discord_client_id"] = DISCORD_CLIENT_ID
     if not cfg.get("button_url"):
         cfg["button_url"] = REPO_URL
-    lang = str(cfg.get("language") or "ru").lower()
-    cfg["language"] = lang if lang in ("ru", "en") else "ru"
+    lang = str(cfg.get("language") or "en").lower()
+    cfg["language"] = lang if lang in ("ru", "en") else "en"
     return cfg
 
 
@@ -59,8 +59,8 @@ def save_config(cfg: dict[str, Any]) -> None:
     ensure_config_dir()
     merged = deepcopy(DEFAULTS)
     merged.update({k: v for k, v in cfg.items() if k in DEFAULTS})
-    lang = str(merged.get("language") or "ru").lower()
-    merged["language"] = lang if lang in ("ru", "en") else "ru"
+    lang = str(merged.get("language") or "en").lower()
+    merged["language"] = lang if lang in ("ru", "en") else "en"
     CONFIG_PATH.write_text(
         json.dumps(merged, indent=2, ensure_ascii=False),
         encoding="utf-8",

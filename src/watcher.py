@@ -53,8 +53,10 @@ CONVERSATION_DB = (
 AI_TRACKING_DB = Path.home() / ".cursor" / "ai-tracking" / "ai-code-tracking.db"
 PROJECTS = Path.home() / ".cursor" / "projects"
 
-# After AI stops, ignore stale tool traces older than this
-STALE_TOOL_SEC = 25.0
+# Treat AI as active if transcript / tracking / composer updated within this window
+ACTIVE_SEC = 12.0
+# Tracking file edits count as activity for this long
+TRACK_ACTIVE_SEC = 10.0
 
 
 @dataclass
@@ -77,6 +79,7 @@ class _ComposerMeta:
     has_draft: bool = False
     workspace_path: str = ""
     last_updated_ms: float = 0.0
+    unfinished_run_ms: float = 0.0
 
 
 def is_cursor_running() -> bool:
@@ -178,6 +181,10 @@ def _composer_meta(agent_id: str) -> _ComposerMeta:
         out.last_updated_ms = float(data.get("lastUpdatedAt") or 0)
     except (TypeError, ValueError):
         out.last_updated_ms = 0.0
+    try:
+        out.unfinished_run_ms = float(data.get("unfinishedRunAt") or 0)
+    except (TypeError, ValueError):
+        out.unfinished_run_ms = 0.0
 
     ws = data.get("workspaceIdentifier") or {}
     if isinstance(ws, dict):
@@ -466,10 +473,16 @@ def _activity_label(lang: str, kind: str, file_name: str = "") -> str:
     return t(lang, "act_in_cursor")
 
 
+def _age_sec(now: float, ts_ms: float) -> float:
+    if not ts_ms:
+        return 1e9
+    return max(0.0, now - (ts_ms / 1000.0))
+
+
 class CursorWatcher:
     def __init__(self) -> None:
         self._state = CursorState()
-        self._lang = "ru"
+        self._lang = "en"
 
     def set_language(self, lang: str) -> None:
         self._lang = normalize_lang(lang)
@@ -519,23 +532,37 @@ class CursorWatcher:
                 ws_path = track_path
 
             now = time.time()
-            track_fresh = bool(track_ts) and (now - (track_ts / 1000.0)) <= STALE_TOOL_SEC
+            transcript_age = (now - tool_mtime) if tool_mtime else 1e9
+            track_age = _age_sec(now, track_ts)
+            composer_age = _age_sec(now, meta.last_updated_ms)
+            unfinished_age = _age_sec(now, meta.unfinished_run_ms)
 
-            # 1) User typing a prompt (never expose the text)
-            if meta.has_draft and not meta.generating:
+            # Cursor often clears generatingBubbleIds mid-run — also trust fresh writes
+            ai_active = bool(
+                meta.generating
+                or unfinished_age <= ACTIVE_SEC
+                or transcript_age <= ACTIVE_SEC
+                or track_age <= TRACK_ACTIVE_SEC
+                or (composer_age <= 4.0 and meta.status in GENERATING_STATUSES)
+            )
+
+            # 1) Typing a prompt while AI is quiet (never expose the text)
+            if meta.has_draft and not ai_active:
                 kind = "typing"
                 tool_file = ""
-            # 2) AI actively working — only then show tool activity
-            elif meta.generating:
+            # 2) AI working — always refresh tool label from latest transcript/tracking
+            elif ai_active:
                 if tool_kind in ("editing", "reading", "shell", "search", "thinking", "chatting"):
                     kind = tool_kind
-                elif track_fresh and track_file:
+                    if kind == "chatting":
+                        tool_file = ""
+                elif track_age <= TRACK_ACTIVE_SEC and track_file:
                     kind = "editing"
                     tool_file = track_file
                 else:
                     kind = "chatting"
                     tool_file = ""
-            # 3) Idle — never keep stale "shell/editing" after the run ends
+            # 3) Idle
             else:
                 kind = "idle"
                 tool_file = ""

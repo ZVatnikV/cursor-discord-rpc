@@ -11,7 +11,8 @@ from .i18n import normalize_lang, t
 from .watcher import CursorState
 
 log = logging.getLogger(__name__)
-MIN_PUSH_SEC = 0.8
+# Only throttle identical payloads; content changes push immediately
+MIN_PUSH_SEC = 0.35
 
 
 def _clip(text: str, n: int) -> str:
@@ -81,7 +82,7 @@ class DiscordRPC:
         self._last_push = 0.0
 
     def build_presence(self, cfg: dict[str, Any], state: CursorState) -> dict[str, Any]:
-        lang = normalize_lang(str(cfg.get("language") or "ru"))
+        lang = normalize_lang(str(cfg.get("language") or "en"))
         details = _clip(state.activity or t(lang, "act_idle"), 128)
 
         chat = (state.chat_name or "").strip()

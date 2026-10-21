@@ -14,25 +14,25 @@ from .rpc import DiscordRPC
 from .watcher import CursorWatcher
 
 log = logging.getLogger(__name__)
-POLL_SEC = 0.7
+POLL_SEC = 0.35
 
 
 class RPCService:
     def __init__(self) -> None:
         self.cfg = load_config()
         self.watcher = CursorWatcher()
-        self.watcher.set_language(str(self.cfg.get("language") or "ru"))
+        self.watcher.set_language(str(self.cfg.get("language") or "en"))
         self.rpc = DiscordRPC(str(self.cfg.get("discord_client_id") or ""))
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._status_ok = False
-        self._status_msg = t(str(self.cfg.get("language") or "ru"), "status_starting")
+        self._status_msg = t(str(self.cfg.get("language") or "en"), "status_starting")
         self._lock = threading.Lock()
         self.app = None
         self._tray = None
 
     def _lang(self) -> str:
-        return normalize_lang(str(self.cfg.get("language") or "ru"))
+        return normalize_lang(str(self.cfg.get("language") or "en"))
 
     def get_live_state(self):
         return self.watcher.state
@@ -46,7 +46,7 @@ class RPCService:
             was = bool(self.cfg.get("enabled", True))
             self.cfg = dict(cfg)
             save_config(self.cfg)
-            self.watcher.set_language(str(self.cfg.get("language") or "ru"))
+            self.watcher.set_language(str(self.cfg.get("language") or "en"))
             new_id = str(self.cfg.get("discord_client_id") or "")
             if new_id != old_id:
                 self.rpc.disconnect()
@@ -91,7 +91,7 @@ class RPCService:
             try:
                 with self._lock:
                     cfg = dict(self.cfg)
-                lang = normalize_lang(str(cfg.get("language") or "ru"))
+                lang = normalize_lang(str(cfg.get("language") or "en"))
                 state = self.watcher.refresh(lang)
 
                 if not cfg.get("enabled", True):

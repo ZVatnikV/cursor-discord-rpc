@@ -95,13 +95,13 @@ STRINGS: dict[str, dict[str, str]] = {
 
 
 def normalize_lang(lang: str | None) -> str:
-    lang = (lang or "ru").strip().lower()
-    return lang if lang in STRINGS else "ru"
+    lang = (lang or "en").strip().lower()
+    return lang if lang in STRINGS else "en"
 
 
 def t(lang: str, key: str, **kwargs: Any) -> str:
     lang = normalize_lang(lang)
-    text = STRINGS.get(lang, STRINGS["ru"]).get(key) or STRINGS["en"].get(key) or key
+    text = STRINGS.get(lang, STRINGS["en"]).get(key) or STRINGS["en"].get(key) or key
     if kwargs:
         try:
             return text.format(**kwargs)
