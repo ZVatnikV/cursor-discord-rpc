@@ -1,4 +1,4 @@
-"""Live Cursor state: focused chat, workspace, AI activity."""
+"""Live Cursor state from composerData + bubbleId toolFormerData."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import sqlite3
 import time
 import urllib.parse
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -17,26 +18,6 @@ try:
     import psutil
 except ImportError:  # pragma: no cover
     psutil = None  # type: ignore
-
-USER_QUERY_RE = re.compile(
-    r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL | re.IGNORECASE
-)
-TIMESTAMP_RE = re.compile(r"<timestamp>.*?</timestamp>", re.DOTALL | re.IGNORECASE)
-
-EDIT_TOOLS = {"Write", "StrReplace", "EditNotebook", "Delete"}
-READ_TOOLS = {"Read", "Grep", "Glob"}
-SHELL_TOOLS = {"Shell"}
-SEARCH_TOOLS = {"WebSearch", "WebFetch", "Task", "CallDynamicTool", "GetDynamicTools"}
-
-# Composer statuses that mean the agent is actively working
-GENERATING_STATUSES = {
-    "generating",
-    "applying",
-    "running",
-    "in_progress",
-    "streaming",
-    "working",
-}
 
 GLOBAL_STATE = (
     Path.home() / "AppData" / "Roaming" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
@@ -53,10 +34,35 @@ CONVERSATION_DB = (
 AI_TRACKING_DB = Path.home() / ".cursor" / "ai-tracking" / "ai-code-tracking.db"
 PROJECTS = Path.home() / ".cursor" / "projects"
 
-# Treat AI as active if transcript / tracking / composer updated within this window
-ACTIVE_SEC = 12.0
-# Tracking file edits count as activity for this long
-TRACK_ACTIVE_SEC = 10.0
+# Cursor bubble toolFormerData.name → activity kind
+TOOL_KIND = {
+    "edit_file_v2": "editing",
+    "edit_file": "editing",
+    "search_replace": "editing",
+    "write": "editing",
+    "apply_patch": "editing",
+    "read_file_v2": "reading",
+    "read_file": "reading",
+    "ripgrep_raw_search": "search",
+    "grep": "search",
+    "glob_file_search": "search",
+    "file_search": "search",
+    "run_terminal_command_v2": "shell",
+    "run_terminal_cmd": "shell",
+    "shell": "shell",
+    "web_search": "search",
+    "web_fetch": "search",
+    "get_mcp_tools": "search",
+    "call_mcp_tool": "search",
+    "task_v2": "chatting",
+    "todo_write": "chatting",
+    "create_plan": "chatting",
+    "update_current_step": "chatting",
+    "search_conversations": "search",
+}
+
+LOADING_STATUSES = {"loading", "pending", "running", "in_progress"}
+DONE_COMPOSER = {"completed", "aborted", "none", ""}
 
 
 @dataclass
@@ -66,7 +72,7 @@ class CursorState:
     workspace_path: str = ""
     chat_name: str = ""
     activity: str = ""
-    kind: str = "idle"  # idle | typing | editing | reading | shell | search | thinking | chatting
+    kind: str = "idle"
     agent_id: str = ""
     updated_at: float = field(default_factory=time.time)
 
@@ -80,6 +86,17 @@ class _ComposerMeta:
     workspace_path: str = ""
     last_updated_ms: float = 0.0
     unfinished_run_ms: float = 0.0
+    subtitle: str = ""
+
+
+@dataclass
+class _BubbleAct:
+    kind: str = "idle"
+    file_name: str = ""
+    tool_name: str = ""
+    tool_status: str = ""
+    active: bool = False
+    age_sec: float = 1e9
 
 
 def is_cursor_running() -> bool:
@@ -100,22 +117,34 @@ def _decode_file_uri(uri: str) -> str:
     return uri
 
 
-def _selected_agent_id() -> str:
+def _open_state() -> Optional[sqlite3.Connection]:
     if not GLOBAL_STATE.exists():
+        return None
+    try:
+        # Read-write avoids stale WAL snapshots on some SQLite builds
+        return sqlite3.connect(str(GLOBAL_STATE), timeout=0.4)
+    except sqlite3.Error:
+        try:
+            return sqlite3.connect(f"file:{GLOBAL_STATE}?mode=ro", uri=True, timeout=0.4)
+        except sqlite3.Error:
+            return None
+
+
+def _selected_agent_id() -> str:
+    con = _open_state()
+    if con is None:
         return ""
     try:
-        con = sqlite3.connect(f"file:{GLOBAL_STATE}?mode=ro", uri=True)
-        try:
-            for key in ("cursor/glass.selectedAgent", "cursor/glass.lastRealAgent"):
-                row = con.execute(
-                    "SELECT value FROM ItemTable WHERE key=?", (key,)
-                ).fetchone()
-                if row and str(row[0]).strip():
-                    return str(row[0]).strip().strip('"')
-        finally:
-            con.close()
-    except (sqlite3.Error, OSError):
-        pass
+        for key in ("cursor/glass.selectedAgent", "cursor/glass.lastRealAgent"):
+            row = con.execute(
+                "SELECT value FROM ItemTable WHERE key=?", (key,)
+            ).fetchone()
+            if row and str(row[0]).strip():
+                return str(row[0]).strip().strip('"')
+    except sqlite3.Error:
+        return ""
+    finally:
+        con.close()
     return ""
 
 
@@ -134,9 +163,7 @@ def _rich_has_text(rich: str) -> bool:
         if isinstance(node, dict):
             if isinstance(node.get("text"), str) and node["text"].strip():
                 return True
-            for v in node.values():
-                if walk(v):
-                    return True
+            return any(walk(v) for v in node.values())
         if isinstance(node, list):
             return any(walk(x) for x in node)
         return False
@@ -146,19 +173,24 @@ def _rich_has_text(rich: str) -> bool:
 
 def _composer_meta(agent_id: str) -> _ComposerMeta:
     out = _ComposerMeta()
-    if not agent_id or not GLOBAL_STATE.exists():
+    if not agent_id:
+        return out
+    con = _open_state()
+    if con is None:
         return out
     try:
-        con = sqlite3.connect(f"file:{GLOBAL_STATE}?mode=ro", uri=True)
-        try:
-            row = con.execute(
-                "SELECT value FROM cursorDiskKV WHERE key=?",
-                (f"composerData:{agent_id}",),
-            ).fetchone()
-        finally:
-            con.close()
-    except (sqlite3.Error, OSError):
+        row = con.execute(
+            "SELECT value FROM cursorDiskKV WHERE key=?",
+            (f"composerData:{agent_id}",),
+        ).fetchone()
+    except sqlite3.Error:
+        con.close()
         return out
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
     if not row:
         return out
     try:
@@ -167,10 +199,11 @@ def _composer_meta(agent_id: str) -> _ComposerMeta:
         return out
 
     out.name = str(data.get("name") or "").strip()
+    out.subtitle = str(data.get("subtitle") or "").strip()
     out.status = str(data.get("status") or "").strip().lower()
     bubbles = data.get("generatingBubbleIds") or []
     out.generating = bool(
-        out.status in GENERATING_STATUSES
+        out.status == "generating"
         or (isinstance(bubbles, list) and len(bubbles) > 0)
         or bool(data.get("isContinuationInProgress"))
     )
@@ -198,80 +231,159 @@ def _composer_meta(agent_id: str) -> _ComposerMeta:
     return out
 
 
-def _transcript_for_agent(agent_id: str) -> Optional[Path]:
-    if not agent_id or not PROJECTS.exists():
-        return None
-    direct = list(PROJECTS.glob(f"**/agent-transcripts/{agent_id}/{agent_id}.jsonl"))
-    if direct:
-        return max(direct, key=lambda p: p.stat().st_mtime)
-    loose = list(PROJECTS.glob(f"**/agent-transcripts/**/{agent_id}.jsonl"))
-    if loose:
-        return max(loose, key=lambda p: p.stat().st_mtime)
-    return None
-
-
-def _newest_transcript() -> Optional[Path]:
-    if not PROJECTS.exists():
-        return None
-    newest: Optional[Path] = None
-    newest_mtime = 0.0
+def _parse_created_at(raw: Any) -> float:
+    if raw is None:
+        return 0.0
+    if isinstance(raw, (int, float)):
+        val = float(raw)
+        return val / 1000.0 if val > 1e12 else val
+    text = str(raw).strip()
+    if not text:
+        return 0.0
     try:
-        for f in PROJECTS.rglob("*.jsonl"):
-            if "agent-transcripts" not in f.parts:
-                continue
-            try:
-                m = f.stat().st_mtime
-            except OSError:
-                continue
-            if m > newest_mtime:
-                newest_mtime, newest = m, f
-    except OSError:
-        return None
-    return newest
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return 0.0
 
 
-def _project_from_transcript(transcript: Path) -> Optional[Path]:
-    for parent in transcript.parents:
-        if parent.name == "agent-transcripts":
-            return parent.parent
-    return None
+def _file_from_tool_args(raw: str) -> str:
+    if not raw or not isinstance(raw, str):
+        return ""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    for key in (
+        "relativeWorkspacePath",
+        "path",
+        "target_file",
+        "filePath",
+        "file_path",
+        "targetDirectory",
+    ):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return Path(val.replace("\\", "/")).name
+    return ""
 
 
-def _workspace_from_project(project: Path) -> tuple[str, str]:
-    root = Path.home() / "AppData" / "Roaming" / "Cursor" / "User" / "workspaceStorage"
-    pid = project.name.lower()
-    if root.exists():
+def _kind_from_tool(name: str) -> str:
+    key = (name or "").strip()
+    if key in TOOL_KIND:
+        return TOOL_KIND[key]
+    low = key.lower()
+    if "edit" in low or "write" in low or "replace" in low:
+        return "editing"
+    if "read" in low:
+        return "reading"
+    if "terminal" in low or "shell" in low or "command" in low:
+        return "shell"
+    if "grep" in low or "ripgrep" in low or "search" in low or "glob" in low or "web" in low:
+        return "search"
+    return "chatting"
+
+
+def _bubble_activity(agent_id: str) -> _BubbleAct:
+    """Primary activity signal: Cursor bubbleId + toolFormerData."""
+    out = _BubbleAct()
+    if not agent_id:
+        return out
+    con = _open_state()
+    if con is None:
+        return out
+    now = time.time()
+    try:
+        rows = con.execute(
+            "SELECT value FROM cursorDiskKV WHERE key LIKE ? ORDER BY rowid DESC LIMIT 80",
+            (f"bubbleId:{agent_id}:%",),
+        ).fetchall()
+    except sqlite3.Error:
+        con.close()
+        return out
+    finally:
         try:
-            for d in root.iterdir():
-                wj = d / "workspace.json"
-                if not wj.exists():
-                    continue
-                try:
-                    data = json.loads(wj.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    continue
-                folder = data.get("folder") or ""
-                if not (isinstance(folder, str) and folder.startswith("file:///")):
-                    continue
-                full = _decode_file_uri(folder)
-                encoded = re.sub(r"[^A-Za-z0-9]+", "-", full).strip("-").lower()
-                if encoded == pid or pid in encoded or encoded in pid:
-                    return Path(full).name, full
-                if Path(full).name.lower().replace(" ", "-") in pid:
-                    return Path(full).name, full
-        except OSError:
+            con.close()
+        except Exception:
             pass
 
-    name = project.name
-    for prefix in (
-        "c-Users-admin-Documents-",
-        "C-Users-admin-Documents-",
-        "d-SteamLibrary-steamapps-common-",
+    loading: Optional[_BubbleAct] = None
+    latest_tool: Optional[_BubbleAct] = None
+    latest_thinking_age = 1e9
+    latest_text_age = 1e9
+    newest_age = 1e9
+    rank = 0
+
+    for (raw,) in rows:
+        try:
+            b = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(b, dict):
+            continue
+
+        created = _parse_created_at(b.get("createdAt"))
+        # rowid DESC order ≈ recency; missing createdAt → use rank as soft age
+        age = (now - created) if created else float(rank)
+        newest_age = min(newest_age, age)
+        rank += 1
+
+        # Thinking bubble (capabilityType 30)
+        if b.get("capabilityType") == 30 or b.get("thinking"):
+            latest_thinking_age = min(latest_thinking_age, age)
+
+        text = str(b.get("text") or "").strip()
+        if b.get("type") == 2 and text:
+            latest_text_age = min(latest_text_age, age)
+
+        td = b.get("toolFormerData")
+        if not isinstance(td, dict) or not td.get("name"):
+            continue
+
+        name = str(td.get("name") or "")
+        status = str(td.get("status") or "").lower()
+        args = str(td.get("params") or td.get("rawArgs") or "")
+        fname = _file_from_tool_args(args)
+        kind = _kind_from_tool(name)
+        act = _BubbleAct(
+            kind=kind,
+            file_name=fname,
+            tool_name=name,
+            tool_status=status,
+            active=status in LOADING_STATUSES,
+            age_sec=age,
+        )
+        if latest_tool is None:
+            latest_tool = act
+        if status in LOADING_STATUSES and loading is None:
+            loading = act
+
+    if loading is not None:
+        loading.active = True
+        return loading
+
+    # Still in a turn: recent thinking / streaming text / fresh bubbles
+    turn_hot = newest_age <= 10.0 or latest_thinking_age <= 8.0
+    if turn_hot and latest_thinking_age <= 8.0 and (
+        latest_tool is None or latest_thinking_age <= (latest_tool.age_sec + 0.5)
     ):
-        if name.lower().startswith(prefix.lower()):
-            name = name[len(prefix) :]
-            break
-    return name.replace("-", " "), ""
+        return _BubbleAct(kind="thinking", active=True, age_sec=latest_thinking_age)
+
+    if turn_hot and latest_tool is not None and latest_tool.age_sec <= 30.0:
+        latest_tool.active = True
+        return latest_tool
+
+    if turn_hot and latest_text_age <= 8.0:
+        return _BubbleAct(kind="chatting", active=True, age_sec=latest_text_age)
+
+    if latest_tool is not None and latest_tool.age_sec <= 5.0:
+        latest_tool.active = True
+        return latest_tool
+
+    return out
 
 
 def _chat_title(agent_id: str) -> str:
@@ -290,167 +402,77 @@ def _chat_title(agent_id: str) -> str:
         return ""
     if not row:
         return ""
-    return _clean_title(str(row[0] or ""))
+    text = re.sub(r"\s+", " ", str(row[0] or "")).strip()
+    if len(text) > 48:
+        text = text[:45].rstrip() + "…"
+    return text
 
 
-def _tracking_for_agent(agent_id: str) -> tuple[str, str, str, float]:
-    """Return (workspace_name, workspace_path, latest_file, timestamp_ms)."""
+def _tracking_workspace(agent_id: str) -> tuple[str, str]:
     if not agent_id or not AI_TRACKING_DB.exists():
-        return "", "", "", 0.0
+        return "", ""
     try:
         con = sqlite3.connect(f"file:{AI_TRACKING_DB}?mode=ro", uri=True)
         try:
             row = con.execute(
-                "SELECT fileName, timestamp FROM ai_code_hashes "
+                "SELECT fileName FROM ai_code_hashes "
                 "WHERE conversationId=? ORDER BY timestamp DESC LIMIT 1",
                 (agent_id,),
             ).fetchone()
         finally:
             con.close()
     except (sqlite3.Error, OSError):
-        return "", "", "", 0.0
-
+        return "", ""
     if not row or not row[0]:
-        return "", "", "", 0.0
-
+        return "", ""
     raw = str(row[0]).lstrip("/")
-    try:
-        ts = float(row[1] or 0)
-    except (TypeError, ValueError):
-        ts = 0.0
     path = Path(raw)
-    file_name = path.name
     parts = path.parts
-    ws_path = ""
     for i, part in enumerate(parts):
         if part.lower() in {"documents", "projects"} and i + 1 < len(parts):
-            ws_path = str(Path(*parts[: i + 2]))
-            break
-    if not ws_path:
-        for parent in path.parents:
-            if (parent / ".git").exists() or (parent / "run.py").exists():
-                ws_path = str(parent)
-                break
-    if not ws_path:
-        ws_path = str(path.parent)
-    return Path(ws_path).name, ws_path, file_name, ts
+            ws = Path(*parts[: i + 2])
+            return ws.name, str(ws)
+    return path.parent.name, str(path.parent)
 
 
-def _clean_title(raw: str) -> str:
-    text = TIMESTAMP_RE.sub("", raw)
-    m = USER_QUERY_RE.search(text)
-    if m:
-        text = m.group(1)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    if not text:
-        return ""
-    text = text.split(". ")[0].strip()
-    words = text.split()
-    if len(words) > 8:
-        text = " ".join(words[:8])
-    if len(text) > 48:
-        text = text[:45].rstrip() + "…"
-    return text
-
-
-def _message_parts(obj: dict[str, Any]) -> list[Any]:
-    msg = obj.get("message")
-    content: Any = None
-    if isinstance(msg, dict):
-        content = msg.get("content")
-    if content is None:
-        content = obj.get("content")
-    return content if isinstance(content, list) else []
-
-
-def _user_text(obj: dict[str, Any]) -> str:
-    parts = [
-        str(p.get("text") or "")
-        for p in _message_parts(obj)
-        if isinstance(p, dict) and p.get("type") == "text"
-    ]
-    return _clean_title("\n".join(parts)) if parts else ""
-
-
-def _fname(inp: dict[str, Any]) -> str:
-    raw = inp.get("path") or inp.get("target_file") or ""
-    if isinstance(raw, str) and raw.strip():
-        return Path(raw.replace("\\", "/")).name
-    return ""
-
-
-def _parse_transcript(path: Path) -> tuple[str, str, str, float]:
-    """Return (chat_from_query, kind, file_name, last_tool_mtime)."""
+def _workspace_from_project_id(project_name: str) -> tuple[str, str]:
+    root = Path.home() / "AppData" / "Roaming" / "Cursor" / "User" / "workspaceStorage"
+    pid = project_name.lower()
+    if not root.exists():
+        return project_name.replace("-", " "), ""
     try:
-        st = path.stat()
-        size = st.st_size
-        mtime = st.st_mtime
-        with path.open("rb") as fh:
-            if size > 300_000:
-                fh.seek(-300_000, 2)
-                tail = fh.read().decode("utf-8", errors="ignore").split("\n", 1)[-1]
-            else:
-                tail = fh.read().decode("utf-8", errors="ignore")
+        for d in root.iterdir():
+            wj = d / "workspace.json"
+            if not wj.exists():
+                continue
+            try:
+                data = json.loads(wj.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            folder = data.get("folder") or ""
+            if not (isinstance(folder, str) and folder.startswith("file:///")):
+                continue
+            full = _decode_file_uri(folder)
+            encoded = re.sub(r"[^A-Za-z0-9]+", "-", full).strip("-").lower()
+            if encoded == pid or pid in encoded or encoded in pid:
+                return Path(full).name, full
     except OSError:
-        return "", "idle", "", 0.0
+        pass
+    return project_name.replace("-", " "), ""
 
-    last_user = ""
-    first_user = ""
-    kind = "idle"
-    file_name = ""
-    last_action_age_hint = mtime
 
-    for line in tail.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        role = str(obj.get("role") or "").lower()
-        if role in ("user", "human"):
-            title = _user_text(obj)
-            if title:
-                if not first_user:
-                    first_user = title
-                last_user = title
-                kind = "chatting"
-                file_name = ""
-
-        for part in _message_parts(obj):
-            if not isinstance(part, dict):
-                continue
-            ptype = part.get("type")
-            if ptype in ("thinking", "reasoning"):
-                kind = "thinking"
-                continue
-            if ptype != "tool_use":
-                continue
-            name = str(part.get("name") or "")
-            inp = part.get("input") or {}
-            if not isinstance(inp, dict):
-                inp = {}
-            fname = _fname(inp)
-
-            if name in EDIT_TOOLS:
-                kind = "editing"
-                if fname:
-                    file_name = fname
-            elif name in READ_TOOLS:
-                kind = "reading"
-                if fname:
-                    file_name = fname
-            elif name in SHELL_TOOLS:
-                kind = "shell"
-            elif name in SEARCH_TOOLS:
-                kind = "search"
-            elif name:
-                kind = "chatting"
-
-    return first_user or last_user, kind, file_name, last_action_age_hint
+def _workspace_fallback(agent_id: str) -> tuple[str, str]:
+    track = _tracking_workspace(agent_id)
+    if track[0]:
+        return track
+    if not agent_id or not PROJECTS.exists():
+        return "", ""
+    # Prefer project folder that owns this agent's transcript
+    hits = list(PROJECTS.glob(f"**/agent-transcripts/{agent_id}"))
+    if hits:
+        project = hits[0].parent.parent
+        return _workspace_from_project_id(project.name)
+    return "", ""
 
 
 def _activity_label(lang: str, kind: str, file_name: str = "") -> str:
@@ -471,12 +493,6 @@ def _activity_label(lang: str, kind: str, file_name: str = "") -> str:
     if kind == "chatting":
         return t(lang, "act_chatting")
     return t(lang, "act_in_cursor")
-
-
-def _age_sec(now: float, ts_ms: float) -> float:
-    if not ts_ms:
-        return 1e9
-    return max(0.0, now - (ts_ms / 1000.0))
 
 
 class CursorWatcher:
@@ -503,76 +519,51 @@ class CursorWatcher:
         if running:
             agent_id = _selected_agent_id()
             meta = _composer_meta(agent_id) if agent_id else _ComposerMeta()
-
-            transcript: Optional[Path] = None
-            if agent_id:
-                transcript = _transcript_for_agent(agent_id)
-            else:
-                transcript = _newest_transcript()
-                if transcript is not None:
-                    agent_id = transcript.stem
-                    meta = _composer_meta(agent_id)
-
-            track_ws, track_path, track_file, track_ts = (
-                _tracking_for_agent(agent_id) if agent_id else ("", "", "", 0.0)
-            )
-
-            tool_kind, tool_file, tool_mtime = "idle", "", 0.0
-            if transcript is not None:
-                project = _project_from_transcript(transcript)
-                if project is not None and not track_ws and not meta.workspace_path:
-                    workspace, ws_path = _workspace_from_project(project)
-                _q, tool_kind, tool_file, tool_mtime = _parse_transcript(transcript)
+            bubble = _bubble_activity(agent_id) if agent_id else _BubbleAct()
 
             if meta.workspace_path:
                 ws_path = meta.workspace_path
                 workspace = Path(ws_path).name
-            elif track_ws:
-                workspace = track_ws
-                ws_path = track_path
+            else:
+                workspace, ws_path = _workspace_fallback(agent_id)
 
             now = time.time()
-            transcript_age = (now - tool_mtime) if tool_mtime else 1e9
-            track_age = _age_sec(now, track_ts)
-            composer_age = _age_sec(now, meta.last_updated_ms)
-            unfinished_age = _age_sec(now, meta.unfinished_run_ms)
-
-            # Cursor often clears generatingBubbleIds mid-run — also trust fresh writes
-            ai_active = bool(
-                meta.generating
-                or unfinished_age <= ACTIVE_SEC
-                or transcript_age <= ACTIVE_SEC
-                or track_age <= TRACK_ACTIVE_SEC
-                or (composer_age <= 4.0 and meta.status in GENERATING_STATUSES)
+            unfinished_age = (
+                now - meta.unfinished_run_ms / 1000.0 if meta.unfinished_run_ms else 1e9
             )
+            composer_hot = meta.generating or unfinished_age <= 15.0
 
-            # 1) Typing a prompt while AI is quiet (never expose the text)
-            if meta.has_draft and not ai_active:
+            # 1) Live tool (status=loading) or fresh bubble activity
+            if bubble.active and bubble.kind != "idle":
+                kind = bubble.kind
+            # 2) Typing a prompt (never expose text)
+            elif meta.has_draft and not composer_hot and not bubble.active:
                 kind = "typing"
-                tool_file = ""
-            # 2) AI working — always refresh tool label from latest transcript/tracking
-            elif ai_active:
-                if tool_kind in ("editing", "reading", "shell", "search", "thinking", "chatting"):
-                    kind = tool_kind
-                    if kind == "chatting":
-                        tool_file = ""
-                elif track_age <= TRACK_ACTIVE_SEC and track_file:
+            # 3) Composer still hot (unfinishedRun / generating)
+            elif composer_hot:
+                if bubble.kind != "idle":
+                    kind = bubble.kind
+                elif meta.subtitle.lower().startswith("edited"):
                     kind = "editing"
-                    tool_file = track_file
                 else:
                     kind = "chatting"
-                    tool_file = ""
-            # 3) Idle
+            # 4) Idle — do not keep stale Reading forever
             else:
                 kind = "idle"
-                tool_file = ""
 
+            file_name = bubble.file_name if kind in ("editing", "reading", "search") else ""
+            if kind == "search":
+                # Searching doesn't need file in label, but keep if useful
+                pass
+            if kind == "editing" and not file_name and meta.subtitle:
+                # subtitle like "Edited a.py, b.py"
+                m = re.search(r"([\w.-]+\.\w+)", meta.subtitle)
+                if m:
+                    file_name = m.group(1)
             chat = meta.name or _chat_title(agent_id) or ""
             if not chat:
                 chat = t(lang, "chat_fallback") if agent_id else ""
-
-            activity = _activity_label(lang, kind, tool_file)
-
+            activity = _activity_label(lang, kind, file_name)
         else:
             activity = t(lang, "act_in_cursor")
 
