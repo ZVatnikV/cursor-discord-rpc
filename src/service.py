@@ -9,24 +9,30 @@ from typing import Any, Optional
 
 from . import autostart
 from .config import APP_NAME, ensure_config_dir, load_config, save_config
+from .i18n import normalize_lang, t
 from .rpc import DiscordRPC
 from .watcher import CursorWatcher
 
 log = logging.getLogger(__name__)
+POLL_SEC = 0.7
 
 
 class RPCService:
     def __init__(self) -> None:
         self.cfg = load_config()
         self.watcher = CursorWatcher()
+        self.watcher.set_language(str(self.cfg.get("language") or "ru"))
         self.rpc = DiscordRPC(str(self.cfg.get("discord_client_id") or ""))
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._status_ok = False
-        self._status_msg = "Starting"
+        self._status_msg = t(str(self.cfg.get("language") or "ru"), "status_starting")
         self._lock = threading.Lock()
         self.app = None
         self._tray = None
+
+    def _lang(self) -> str:
+        return normalize_lang(str(self.cfg.get("language") or "ru"))
 
     def get_live_state(self):
         return self.watcher.state
@@ -40,6 +46,7 @@ class RPCService:
             was = bool(self.cfg.get("enabled", True))
             self.cfg = dict(cfg)
             save_config(self.cfg)
+            self.watcher.set_language(str(self.cfg.get("language") or "ru"))
             new_id = str(self.cfg.get("discord_client_id") or "")
             if new_id != old_id:
                 self.rpc.disconnect()
@@ -47,7 +54,7 @@ class RPCService:
             if was and not self.cfg.get("enabled", True):
                 self.rpc.clear()
                 self._status_ok = False
-                self._status_msg = "Disabled"
+                self._status_msg = t(self._lang(), "status_disabled")
             autostart.sync_autostart(bool(self.cfg.get("autostart", True)))
 
     def set_enabled(self, enabled: bool) -> None:
@@ -57,7 +64,7 @@ class RPCService:
             if not enabled:
                 self.rpc.clear()
                 self._status_ok = False
-                self._status_msg = "Disabled"
+                self._status_msg = t(self._lang(), "status_disabled")
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -84,25 +91,28 @@ class RPCService:
             try:
                 with self._lock:
                     cfg = dict(self.cfg)
-                state = self.watcher.refresh()
+                lang = normalize_lang(str(cfg.get("language") or "ru"))
+                state = self.watcher.refresh(lang)
 
                 if not cfg.get("enabled", True):
                     self.rpc.clear()
                     self._status_ok = False
-                    self._status_msg = "Disabled"
+                    self._status_msg = t(lang, "status_disabled")
                 elif cfg.get("only_when_cursor_running", True) and not state.running:
                     self.rpc.clear()
                     self._status_ok = False
-                    self._status_msg = "Waiting Cursor"
+                    self._status_msg = t(lang, "status_waiting")
                 else:
                     ok = self.rpc.update(cfg, state)
                     self._status_ok = ok
-                    self._status_msg = "Connected" if ok else "Discord offline"
+                    self._status_msg = (
+                        t(lang, "status_connected") if ok else t(lang, "status_discord_offline")
+                    )
             except Exception as exc:
                 log.exception("loop: %s", exc)
                 self._status_ok = False
-                self._status_msg = "Error"
-            self._stop.wait(1.5)
+                self._status_msg = t(self._lang(), "status_error")
+            self._stop.wait(POLL_SEC)
 
     def run(self, start_minimized: bool = False) -> None:
         from PIL import Image, ImageDraw
@@ -143,11 +153,12 @@ class RPCService:
             import pystray
             from pystray import MenuItem as Item
 
+            lang = self._lang()
             menu = pystray.Menu(
-                Item("Открыть", on_open, default=True),
-                Item("Отключить RPC", on_off),
-                Item("Включить RPC", on_on),
-                Item("Выход", on_quit),
+                Item(t(lang, "tray_open"), on_open, default=True),
+                Item(t(lang, "tray_off"), on_off),
+                Item(t(lang, "tray_on"), on_on),
+                Item(t(lang, "tray_quit"), on_quit),
             )
             self._tray = pystray.Icon("cursor_discord_rpc", img, APP_NAME, menu)
             threading.Thread(target=self._tray.run, daemon=True).start()

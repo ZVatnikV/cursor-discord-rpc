@@ -7,10 +7,11 @@ import time
 from typing import Any, Optional
 
 from .config import REPO_URL
+from .i18n import normalize_lang, t
 from .watcher import CursorState
 
 log = logging.getLogger(__name__)
-MIN_PUSH_SEC = 2.0
+MIN_PUSH_SEC = 0.8
 
 
 def _clip(text: str, n: int) -> str:
@@ -80,10 +81,9 @@ class DiscordRPC:
         self._last_push = 0.0
 
     def build_presence(self, cfg: dict[str, Any], state: CursorState) -> dict[str, Any]:
-        # Line 1 — what the AI is doing in the active chat
-        details = _clip(state.activity or "В Cursor", 128)
+        lang = normalize_lang(str(cfg.get("language") or "ru"))
+        details = _clip(state.activity or t(lang, "act_idle"), 128)
 
-        # Line 2 — chat name · workspace
         chat = (state.chat_name or "").strip()
         workspace = (state.workspace or "").strip()
         if chat and workspace:
@@ -93,7 +93,7 @@ class DiscordRPC:
         elif workspace:
             state_text = _clip(workspace, 128)
         else:
-            state_text = "Cursor IDE"
+            state_text = t(lang, "state_fallback")
 
         payload: dict[str, Any] = {
             "details": details,
@@ -102,7 +102,7 @@ class DiscordRPC:
 
         if not self._skip_image:
             payload["large_image"] = cfg.get("large_image_key") or "cursor"
-            payload["large_text"] = _clip(workspace or "Cursor IDE", 128)
+            payload["large_text"] = _clip(workspace or t(lang, "state_fallback"), 128)
 
         if cfg.get("show_elapsed", True):
             if self._start_ts is None:
