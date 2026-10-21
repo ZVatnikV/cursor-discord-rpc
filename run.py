@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Entry point — python run.py [--minimized]"""
+"""Cursor Discord RPC — entry point."""
 
 from __future__ import annotations
 
@@ -14,27 +14,21 @@ if str(ROOT) not in sys.path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cursor Discord RPC")
-    parser.add_argument(
-        "--minimized",
-        action="store_true",
-        help="Start hidden in the system tray",
-    )
+    parser.add_argument("--minimized", action="store_true", help="Start in tray")
     args = parser.parse_args()
 
+    from src.instance import acquire_lock, kill_other_instances
     from src.service import RPCService, configure_logging
-    from src.single_instance import acquire_lock, kill_other_instances
 
     configure_logging()
     killed = kill_other_instances()
     if killed:
-        print(f"Killed {killed} old RPC instance(s)")
+        print(f"Stopped {killed} old instance(s)")
     if not acquire_lock():
-        # Another copy just won the race — exit quietly
         print("Already running")
         return 0
 
-    service = RPCService()
-    service.run_tray_and_ui(start_minimized=args.minimized)
+    RPCService().run(start_minimized=args.minimized)
     return 0
 
 

@@ -1,3 +1,3 @@
-"""Cursor Discord RPC — beautiful Rich Presence for Cursor IDE."""
+"""Cursor Discord RPC."""
 
-__version__ = "1.2.2"
+__version__ = "2.0.0"

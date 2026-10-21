@@ -1,15 +1,33 @@
-"""Minimal settings window."""
+"""Compact Cursor-style settings window."""
 
 from __future__ import annotations
 
-import tkinter as tk
 from typing import Any, Callable, Optional
 
 import customtkinter as ctk
 
-from ..config import APP_NAME, APP_VERSION, REPO_URL, save_config
-from ..cursor_watcher import CursorState
-from .styles import COLORS, FONTS
+from .config import APP_NAME, APP_VERSION, REPO_URL, save_config
+from .rpc import DiscordRPC
+from .watcher import CursorState
+
+COLORS = {
+    "bg": "#0b0f14",
+    "surface": "#121821",
+    "border": "#243041",
+    "text": "#e8eef6",
+    "muted": "#8b9bb0",
+    "accent": "#3dd6c6",
+    "accent_hover": "#5ee6d6",
+    "danger": "#e85d5d",
+    "ok": "#4ecf8a",
+}
+
+FONTS = {
+    "title": ("Segoe UI Semibold", 22),
+    "heading": ("Segoe UI Semibold", 14),
+    "body": ("Segoe UI", 13),
+    "small": ("Segoe UI", 11),
+}
 
 
 class SettingsApp(ctk.CTk):
@@ -35,20 +53,20 @@ class SettingsApp(ctk.CTk):
         ctk.set_default_color_theme("dark-blue")
 
         self.title(APP_NAME)
-        self.geometry("520x640")
-        self.minsize(480, 560)
+        self.geometry("480x520")
+        self.minsize(440, 480)
         self.configure(fg_color=COLORS["bg"])
 
         self._build()
         self._load()
-        self.after(600, self._tick)
+        self.after(500, self._tick)
         if start_minimized:
             self.withdraw()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build(self) -> None:
         root = ctk.CTkFrame(self, fg_color=COLORS["bg"], corner_radius=0)
-        root.pack(fill="both", expand=True, padx=20, pady=20)
+        root.pack(fill="both", expand=True, padx=22, pady=22)
 
         top = ctk.CTkFrame(root, fg_color="transparent")
         top.pack(fill="x")
@@ -69,11 +87,11 @@ class SettingsApp(ctk.CTk):
 
         ctk.CTkLabel(
             root,
-            text=f"Мини-настройки · v{APP_VERSION}",
+            text=f"Rich Presence для Cursor · v{APP_VERSION}",
             font=FONTS["small"],
             text_color=COLORS["muted"],
             anchor="w",
-        ).pack(fill="x", pady=(4, 14))
+        ).pack(fill="x", pady=(4, 16))
 
         card = ctk.CTkFrame(
             root,
@@ -91,33 +109,27 @@ class SettingsApp(ctk.CTk):
             fg_color=COLORS["danger"],
             hover_color="#c44a4a",
             text_color="#fff",
-            height=44,
+            height=42,
             corner_radius=10,
             command=self._toggle,
         )
-        self.power_btn.pack(fill="x", padx=16, pady=(16, 8))
+        self.power_btn.pack(fill="x", padx=16, pady=(16, 10))
 
         for key, label in (
-            ("show_file", "Показывать файл"),
-            ("show_chat", "Показывать чат"),
-            ("show_workspace", "Показывать проект"),
             ("show_elapsed", "Таймер сессии"),
-            ("button_enabled", "Кнопка GitHub (видят другие)"),
-            ("autostart", "Автозапуск"),
+            ("button_enabled", "Кнопка GitHub (видят друзья)"),
+            ("autostart", "Автозапуск с Windows"),
         ):
             self._switch(card, key, label)
 
         ctk.CTkLabel(
             card,
-            text="Discord: только 2 строки текста. Кнопку себе не видно — только друзьям.",
+            text="details — что делает AI · state — чат · workspace",
             font=FONTS["small"],
             text_color=COLORS["muted"],
-            wraplength=440,
-            justify="left",
             anchor="w",
         ).pack(fill="x", padx=16, pady=(8, 16))
 
-        # Preview
         prev = ctk.CTkFrame(
             root,
             fg_color=COLORS["surface"],
@@ -126,6 +138,7 @@ class SettingsApp(ctk.CTk):
             border_color=COLORS["border"],
         )
         prev.pack(fill="both", expand=True, pady=(14, 0))
+
         ctk.CTkLabel(
             prev,
             text="Превью Discord",
@@ -133,20 +146,23 @@ class SettingsApp(ctk.CTk):
             text_color=COLORS["accent"],
             anchor="w",
         ).pack(fill="x", padx=16, pady=(14, 8))
+
         self.preview_details = ctk.CTkLabel(
             prev, text="…", font=FONTS["heading"], text_color=COLORS["text"], anchor="w"
         )
         self.preview_details.pack(fill="x", padx=16)
+
         self.preview_state = ctk.CTkLabel(
             prev,
             text="…",
             font=FONTS["body"],
             text_color=COLORS["muted"],
             anchor="w",
-            wraplength=440,
+            wraplength=400,
             justify="left",
         )
         self.preview_state.pack(fill="x", padx=16, pady=(2, 4))
+
         self.live_label = ctk.CTkLabel(
             prev,
             text="",
@@ -154,7 +170,7 @@ class SettingsApp(ctk.CTk):
             text_color=COLORS["muted"],
             anchor="w",
             justify="left",
-            wraplength=440,
+            wraplength=400,
         )
         self.live_label.pack(fill="x", padx=16, pady=(8, 16))
 
@@ -171,8 +187,8 @@ class SettingsApp(ctk.CTk):
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
             text_color="#071018",
-            height=40,
-            width=130,
+            height=38,
+            width=120,
             corner_radius=10,
             command=self._save,
         ).pack(side="right")
@@ -204,6 +220,8 @@ class SettingsApp(ctk.CTk):
         out = dict(self.cfg)
         for k, var in self._vars.items():
             out[k] = bool(var.get())
+        out.setdefault("button_url", REPO_URL)
+        out.setdefault("button_label", "GitHub")
         return out
 
     def _sync_power(self) -> None:
@@ -218,9 +236,9 @@ class SettingsApp(ctk.CTk):
             )
 
     def _toggle(self) -> None:
-        self._set_enabled(not bool(self.cfg.get("enabled", True)))
+        self.set_enabled_ui(not bool(self.cfg.get("enabled", True)))
 
-    def _set_enabled(self, enabled: bool) -> None:
+    def set_enabled_ui(self, enabled: bool) -> None:
         self.cfg["enabled"] = enabled
         self.cfg = self._collect()
         self.cfg["enabled"] = enabled
@@ -248,27 +266,22 @@ class SettingsApp(ctk.CTk):
         self.after(2000, lambda: self.toast.configure(text=""))
 
     def _preview(self) -> None:
-        from ..rpc_client import DiscordRPC
-
         cfg = self._collect()
         cfg["enabled"] = bool(self.cfg.get("enabled", True))
         state = CursorState(
             running=True,
             workspace="cursor-discord-rpc",
-            file_name="main.py",
             chat_name="Настройка RPC",
-            activity_label="Редактирует файл",
+            activity="Редактирует ui.py",
         )
         if self.get_live_state:
             live = self.get_live_state()
             if live.workspace:
                 state.workspace = live.workspace
-            if live.file_name:
-                state.file_name = live.file_name
             if live.chat_name:
                 state.chat_name = live.chat_name
-            if live.activity_label:
-                state.activity_label = live.activity_label
+            if live.activity:
+                state.activity = live.activity
 
         if not cfg.get("enabled", True):
             self.preview_details.configure(text="RPC выключен")
@@ -288,10 +301,10 @@ class SettingsApp(ctk.CTk):
                 s = self.get_live_state()
                 self.live_label.configure(
                     text=(
-                        f"{'● Cursor online' if s.running else '○ Cursor offline'}\n"
-                        f"Файл: {s.file_name or '—'}\n"
+                        f"{'● Cursor' if s.running else '○ Cursor offline'}\n"
+                        f"AI: {s.activity or '—'}\n"
                         f"Чат: {s.chat_name or '—'}\n"
-                        f"Проект: {s.workspace or '—'}"
+                        f"Workspace: {s.workspace or '—'}"
                     )
                 )
             if self.get_rpc_status:

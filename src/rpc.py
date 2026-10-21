@@ -1,4 +1,4 @@
-"""Discord Rich Presence — always push fresh data on a short interval."""
+"""Discord Rich Presence client."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import time
 from typing import Any, Optional
 
 from .config import REPO_URL
-from .cursor_watcher import CursorState
+from .watcher import CursorState
 
 log = logging.getLogger(__name__)
 MIN_PUSH_SEC = 2.0
@@ -47,7 +47,7 @@ class DiscordRPC:
             self._start_ts = int(time.time())
             self._last_payload = {}
             self._last_push = 0.0
-            log.info("Connected Discord RPC %s", self.client_id)
+            log.info("Discord RPC connected (%s)", self.client_id)
             return True
         except Exception as exc:
             log.warning("RPC connect failed: %s", exc)
@@ -70,12 +70,6 @@ class DiscordRPC:
         self._last_payload = {}
         self._last_push = 0.0
 
-    def reconnect(self, client_id: str) -> bool:
-        self.disconnect()
-        self.client_id = str(client_id or "").strip()
-        self._skip_image = False
-        return self.connect()
-
     def clear(self) -> None:
         if self._rpc and self._connected:
             try:
@@ -86,18 +80,12 @@ class DiscordRPC:
         self._last_push = 0.0
 
     def build_presence(self, cfg: dict[str, Any], state: CursorState) -> dict[str, Any]:
-        activity = state.activity_label or "В Cursor"
-        file_name = state.file_name if cfg.get("show_file", True) else ""
-        workspace = state.workspace if cfg.get("show_workspace", True) else ""
-        chat = ""
-        if cfg.get("show_chat", True):
-            chat = (cfg.get("manual_chat_name") or "").strip() or state.chat_name
+        # Line 1 — what the AI is doing in the active chat
+        details = _clip(state.activity or "В Cursor", 128)
 
-        if file_name:
-            details = _clip(f"{activity} · {file_name}", 128)
-        else:
-            details = _clip(activity, 128)
-
+        # Line 2 — chat name · workspace
+        chat = (state.chat_name or "").strip()
+        workspace = (state.workspace or "").strip()
         if chat and workspace:
             state_text = _clip(f"{chat} · {workspace}", 128)
         elif chat:
@@ -114,7 +102,7 @@ class DiscordRPC:
 
         if not self._skip_image:
             payload["large_image"] = cfg.get("large_image_key") or "cursor"
-            payload["large_text"] = _clip(workspace or chat or "Cursor IDE", 128)
+            payload["large_text"] = _clip(workspace or "Cursor IDE", 128)
 
         if cfg.get("show_elapsed", True):
             if self._start_ts is None:
@@ -137,13 +125,9 @@ class DiscordRPC:
 
         payload = self.build_presence(cfg, state)
         now = time.time()
-        # Always re-push when content changed; otherwise every MIN_PUSH_SEC
-        content_key = (payload.get("details"), payload.get("state"))
-        last_key = (
-            self._last_payload.get("details"),
-            self._last_payload.get("state"),
-        )
-        if content_key == last_key and (now - self._last_push) < MIN_PUSH_SEC:
+        content = (payload.get("details"), payload.get("state"))
+        last = (self._last_payload.get("details"), self._last_payload.get("state"))
+        if content == last and (now - self._last_push) < MIN_PUSH_SEC:
             return True
 
         try:
@@ -151,12 +135,7 @@ class DiscordRPC:
             self._last_payload = payload
             self._last_push = now
             self._tick += 1
-            log.info(
-                "RPC #%s → %r | %r",
-                self._tick,
-                payload.get("details"),
-                payload.get("state"),
-            )
+            log.info("RPC #%s → %r | %r", self._tick, payload.get("details"), payload.get("state"))
             return True
         except Exception as exc:
             log.warning("RPC update failed: %s", exc)

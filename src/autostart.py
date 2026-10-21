@@ -1,12 +1,12 @@
-"""Windows autostart helpers (Startup folder + optional Cursor launch watcher)."""
+"""Windows Startup shortcut."""
 
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-APP_NAME = "CursorDiscordRPC"
 SHORTCUT_NAME = "Cursor Discord RPC.lnk"
 
 
@@ -21,19 +21,7 @@ def _startup_folder() -> Path:
     )
 
 
-def _target_exe() -> str:
-    if getattr(sys, "frozen", False):
-        return sys.executable
-    # Dev: launch via pythonw / python -m
-    return f'"{sys.executable}" "{Path(__file__).resolve().parent.parent / "run.py"}"'
-
-
-def is_autostart_enabled() -> bool:
-    return (_startup_folder() / SHORTCUT_NAME).exists()
-
-
 def enable_autostart() -> bool:
-    """Create a Startup shortcut. Uses PowerShell COM for .lnk."""
     startup = _startup_folder()
     startup.mkdir(parents=True, exist_ok=True)
     shortcut = startup / SHORTCUT_NAME
@@ -67,8 +55,6 @@ $s.Description = 'Cursor Discord RPC'
 $s.Save()
 """
 
-    import subprocess
-
     try:
         subprocess.run(
             ["powershell", "-NoProfile", "-Command", ps],
@@ -92,6 +78,4 @@ def disable_autostart() -> bool:
 
 
 def sync_autostart(enabled: bool) -> bool:
-    if enabled:
-        return enable_autostart()
-    return disable_autostart()
+    return enable_autostart() if enabled else disable_autostart()

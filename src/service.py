@@ -1,4 +1,4 @@
-"""Background service: watch Cursor, push Discord presence, tray."""
+"""Background loop: watch Cursor → push Discord presence → tray UI."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ import threading
 from typing import Any, Optional
 
 from . import autostart
-from .config import APP_NAME, load_config, save_config
-from .cursor_watcher import CursorWatcher
-from .rpc_client import DiscordRPC
+from .config import APP_NAME, ensure_config_dir, load_config, save_config
+from .rpc import DiscordRPC
+from .watcher import CursorWatcher
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,8 @@ class RPCService:
             save_config(self.cfg)
             new_id = str(self.cfg.get("discord_client_id") or "")
             if new_id != old_id:
-                self.rpc.reconnect(new_id)
+                self.rpc.disconnect()
+                self.rpc = DiscordRPC(new_id)
             if was and not self.cfg.get("enabled", True):
                 self.rpc.clear()
                 self._status_ok = False
@@ -103,10 +104,10 @@ class RPCService:
                 self._status_msg = "Error"
             self._stop.wait(1.5)
 
-    def run_tray_and_ui(self, start_minimized: bool = False) -> None:
+    def run(self, start_minimized: bool = False) -> None:
         from PIL import Image, ImageDraw
 
-        from .ui.app import SettingsApp
+        from .ui import SettingsApp
 
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -128,11 +129,11 @@ class RPCService:
 
         def on_off(_i=None, _item=None):
             self.set_enabled(False)
-            self.app.after(0, lambda: self.app._set_enabled(False))
+            self.app.after(0, lambda: self.app.set_enabled_ui(False))
 
         def on_on(_i=None, _item=None):
             self.set_enabled(True)
-            self.app.after(0, lambda: self.app._set_enabled(True))
+            self.app.after(0, lambda: self.app.set_enabled_ui(True))
 
         def on_quit(_i=None, _item=None):
             self.stop()
@@ -143,7 +144,7 @@ class RPCService:
             from pystray import MenuItem as Item
 
             menu = pystray.Menu(
-                Item("Настройки", on_open, default=True),
+                Item("Открыть", on_open, default=True),
                 Item("Отключить RPC", on_off),
                 Item("Включить RPC", on_on),
                 Item("Выход", on_quit),
@@ -158,7 +159,7 @@ class RPCService:
 
 
 def configure_logging() -> None:
-    from .config import CONFIG_DIR, ensure_config_dir
+    from .config import CONFIG_DIR
 
     ensure_config_dir()
     logging.basicConfig(

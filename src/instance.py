@@ -1,4 +1,4 @@
-"""Ensure only one CursorDiscordRPC process runs."""
+"""Single-instance lock."""
 
 from __future__ import annotations
 
@@ -26,12 +26,10 @@ def _pid_alive(pid: int) -> bool:
 
 
 def kill_other_instances() -> int:
-    """Kill other CursorDiscordRPC.exe / run.py copies. Returns count killed."""
     if psutil is None:
         return 0
     me = os.getpid()
     killed = 0
-    my_exe = Path(sys.executable).resolve()
     for proc in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
         try:
             pid = proc.info["pid"]
@@ -45,17 +43,15 @@ def kill_other_instances() -> int:
                 or "cursordiscordrpc" in exe
                 or ("run.py" in cmdline and "discord" in cmdline and "rpc" in cmdline)
             )
-            if not is_rpc:
-                continue
-            proc.kill()
-            killed += 1
+            if is_rpc:
+                proc.kill()
+                killed += 1
         except (psutil.Error, OSError):
             continue
     return killed
 
 
 def acquire_lock() -> bool:
-    """Return False if another healthy instance already holds the lock."""
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     if LOCK_PATH.exists():
         try:
