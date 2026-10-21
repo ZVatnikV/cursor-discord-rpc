@@ -1,4 +1,4 @@
-"""Background loop: watch Cursor → push Discord presence → tray UI."""
+"""Background loop: watch Cursor → push Discord presence → HTML tray UI."""
 
 from __future__ import annotations
 
@@ -117,37 +117,31 @@ class RPCService:
     def run(self, start_minimized: bool = False) -> None:
         from PIL import Image, ImageDraw
 
-        from .ui import SettingsApp
+        from .webui import WebUI
 
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         draw.rounded_rectangle((4, 4, 60, 60), radius=14, fill=(61, 214, 198, 255))
         draw.rectangle((18, 22, 46, 42), outline=(7, 16, 24, 255), width=3)
 
-        self.app = SettingsApp(
-            config=self.cfg,
-            on_save=self.apply_config,
-            on_toggle_rpc=self.set_enabled,
-            get_live_state=self.get_live_state,
-            get_rpc_status=self.get_rpc_status,
+        self.app = WebUI(
+            service=self,
             start_minimized=start_minimized or bool(self.cfg.get("start_minimized")),
         )
         self.start()
 
         def on_open(_i=None, _item=None):
-            self.app.after(0, self.app.show_window)
+            self.app.show_window()
 
         def on_off(_i=None, _item=None):
             self.set_enabled(False)
-            self.app.after(0, lambda: self.app.set_enabled_ui(False))
 
         def on_on(_i=None, _item=None):
             self.set_enabled(True)
-            self.app.after(0, lambda: self.app.set_enabled_ui(True))
 
         def on_quit(_i=None, _item=None):
             self.stop()
-            self.app.after(0, self.app.destroy_app)
+            self.app.destroy_app()
 
         try:
             import pystray

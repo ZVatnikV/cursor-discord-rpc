@@ -50,6 +50,8 @@ pip install -r requirements.txt
 python run.py
 ```
 
+The settings UI is a native HTML window (WebView2) — dark Cursor-style, animated.
+
 ### Build EXE
 
 ```powershell
@@ -87,13 +89,15 @@ pip install -r requirements.txt
 python run.py
 ```
 
+Интерфейс — HTML в WebView2, стиль Cursor, с анимациями.
+
 ### Сборка EXE
 
 ```powershell
 .\scripts\build_exe.ps1
 ```
 
-В приложении можно переключить язык **RU / EN**.
+Язык: **EN / RU**.
 
 ---
 

@@ -8,7 +8,8 @@ python -m PyInstaller `
     --onefile `
     --windowed `
     --name "CursorDiscordRPC" `
-    --hidden-import customtkinter `
+    --add-data "src/web;src/web" `
+    --hidden-import webview `
     --hidden-import pypresence `
     --hidden-import pystray `
     --hidden-import PIL `

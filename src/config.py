@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "Cursor Discord RPC"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 
 DISCORD_CLIENT_ID = "1562085628630540318"
 REPO_URL = "https://github.com/ZVatnikV/cursor-discord-rpc"

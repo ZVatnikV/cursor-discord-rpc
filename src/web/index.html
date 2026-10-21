@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cursor Discord RPC</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true">
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="grid"></div>
+    <div class="noise"></div>
+  </div>
+
+  <main class="shell">
+    <header class="hero">
+      <div class="brand-block">
+        <div class="logo" aria-hidden="true">
+          <span class="logo-core"></span>
+        </div>
+        <div>
+          <h1 class="brand">Cursor Discord RPC</h1>
+          <p class="tagline" data-i18n="subtitle">Rich Presence for Cursor</p>
+        </div>
+      </div>
+      <div class="status-pill" id="statusPill">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Starting</span>
+      </div>
+    </header>
+
+    <section class="panel controls reveal" style="--d: 0.05s">
+      <button class="power" id="powerBtn" type="button">
+        <span class="power-glow"></span>
+        <span class="power-label" data-i18n="disable_rpc">Disable RPC</span>
+      </button>
+
+      <div class="row">
+        <span class="row-label" data-i18n="lang">Language</span>
+        <div class="seg" role="group">
+          <button type="button" class="seg-btn active" data-lang="en">EN</button>
+          <button type="button" class="seg-btn" data-lang="ru">RU</button>
+        </div>
+      </div>
+
+      <label class="toggle-row">
+        <span data-i18n="show_elapsed">Session timer</span>
+        <input type="checkbox" id="showElapsed" checked />
+        <span class="switch"></span>
+      </label>
+      <label class="toggle-row">
+        <span data-i18n="button_enabled">GitHub button (friends see it)</span>
+        <input type="checkbox" id="buttonEnabled" checked />
+        <span class="switch"></span>
+      </label>
+      <label class="toggle-row">
+        <span data-i18n="autostart">Start with Windows</span>
+        <input type="checkbox" id="autostart" checked />
+        <span class="switch"></span>
+      </label>
+
+      <p class="hint" data-i18n="hint">details — AI activity · state — chat · workspace</p>
+    </section>
+
+    <section class="panel preview reveal" style="--d: 0.12s">
+      <div class="preview-head">
+        <h2 data-i18n="preview">Discord preview</h2>
+        <span class="kind-badge" id="kindBadge">IDLE</span>
+      </div>
+
+      <article class="discord-card" id="discordCard">
+        <div class="discord-avatar">
+          <span>C</span>
+          <i class="online-ring"></i>
+        </div>
+        <div class="discord-body">
+          <div class="discord-playing">PLAYING A GAME</div>
+          <div class="discord-game">Cursor</div>
+          <div class="discord-details" id="details">Idle</div>
+          <div class="discord-state" id="stateLine">Active chat · workspace</div>
+          <div class="discord-meta">
+            <span class="timer" id="timerChip">00:00</span>
+            <a class="gh-btn" id="ghBtn" href="#" tabindex="-1">GitHub</a>
+          </div>
+        </div>
+      </article>
+
+      <div class="chips">
+        <div class="chip">
+          <small data-i18n="label_ai">AI</small>
+          <strong id="chipAi">—</strong>
+        </div>
+        <div class="chip">
+          <small data-i18n="label_chat">Chat</small>
+          <strong id="chipChat">—</strong>
+        </div>
+        <div class="chip">
+          <small data-i18n="label_ws">Workspace</small>
+          <strong id="chipWs">—</strong>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer reveal" style="--d: 0.2s">
+      <span class="toast" id="toast"></span>
+      <button class="save" id="saveBtn" type="button" data-i18n="save">Save</button>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
